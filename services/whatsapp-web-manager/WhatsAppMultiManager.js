@@ -1,0 +1,611 @@
+const { Client, LocalAuth, MessageMedia } = require("whatsapp-web.js");
+const qrcode = require("qrcode-terminal");
+const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
+
+const SESSION_STATUS = {
+    STOPPED: "STOPPED",
+    STARTING: "STARTING",
+    SCAN_QR_CODE: "SCAN_QR_CODE",
+    WORKING: "WORKING",
+    FAILED: "FAILED"
+};
+
+function findSystemBrowserPath() {
+    if (process.env.PUPPETEER_EXECUTABLE_PATH && fs.existsSync(process.env.PUPPETEER_EXECUTABLE_PATH)) {
+        console.log(`🌐 Chromium de entorno detectado: ${process.env.PUPPETEER_EXECUTABLE_PATH}`);
+        return process.env.PUPPETEER_EXECUTABLE_PATH;
+    }
+    const possiblePaths = [
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome-stable",
+        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+        (process.env.LOCALAPPDATA || "") + "\\Google\\Chrome\\Application\\chrome.exe",
+        "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+        "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+    ];
+
+    for (const p of possiblePaths) {
+        if (p && fs.existsSync(p)) {
+            console.log(`🌐 Navegador del sistema detectado: ${p}`);
+            return p;
+        }
+    }
+    return undefined;
+}
+
+class WhatsAppMultiManager {
+    constructor(options = {}) {
+        this.sessionsPath = path.resolve(options.sessionsPath || "./sessions");
+        this.headless = options.headless !== undefined ? options.headless : false;
+        this.webhookUrl = options.webhookUrl || "http://localhost:3000/api/v1/webhooks/waha";
+        this.remoteWaWebVersion = options.remoteWaWebVersion || 
+            "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1014583151-alpha.html";
+
+        this.sessions = new Map();
+
+        this.onStatusChange = null;
+        this.onMessage = null;
+        this.onQr = null;
+
+        this._setupUncaughtHandlers();
+        
+        // Auto-restaurar sesiones guardadas en disco al iniciar
+        setTimeout(() => this.autoRestoreSessions(), 1000);
+    }
+
+    _setupUncaughtHandlers() {
+        process.on("uncaughtException", (err) => {
+            console.error("🚨 [WhatsAppMultiManager] Error no capturado:", err.message);
+        });
+
+        process.on("unhandledRejection", (reason) => {
+            console.error("🚨 [WhatsAppMultiManager] Promesa rechazada no capturada:", reason);
+        });
+    }
+
+    async autoRestoreSessions() {
+        if (!fs.existsSync(this.sessionsPath)) return;
+        
+        try {
+            const files = fs.readdirSync(this.sessionsPath);
+            const sessionIds = files
+                .filter(f => f.startsWith("session-"))
+                .map(f => f.replace("session-", ""))
+                .filter(id => id && id !== "PRUEBA" && !this.sessions.has(id));
+
+            for (const sessionId of sessionIds) {
+                console.log(`🔄 [AutoRestore] Restaurando sesión guardada en disco: ${sessionId}`);
+                try {
+                    this.createSession(sessionId);
+                } catch (err) {
+                    console.error(`⚠️ Error restaurando sesión ${sessionId}:`, err.message);
+                }
+                // Esperar 3.5 segundos entre cada lanzamiento de Chrome para evitar bloqueos
+                await new Promise(r => setTimeout(r, 3500));
+            }
+        } catch (e) {
+            console.error("⚠️ Error durante autoRestoreSessions:", e.message);
+        }
+    }
+
+    createSession(sessionId, config = {}) {
+        if (!sessionId || typeof sessionId !== "string") {
+            throw new Error("El sessionId debe ser una cadena de texto válida.");
+        }
+
+        if (this.sessions.has(sessionId)) {
+            console.log(`ℹ️ [${sessionId}] La sesión ya existe en memoria.`);
+            return this.sessions.get(sessionId);
+        }
+
+        console.log(`⚡ [${sessionId}] Inicializando nueva sesión de WhatsApp...`);
+
+        const systemBrowser = findSystemBrowserPath();
+
+        const puppeteerOptions = {
+            headless: this.headless,
+            args: [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-accelerated-2d-canvas",
+                "--no-first-run",
+                "--no-zygote",
+                "--disable-gpu"
+            ]
+        };
+
+        if (systemBrowser) {
+            puppeteerOptions.executablePath = systemBrowser;
+        }
+
+        const client = new Client({
+            authStrategy: new LocalAuth({
+                clientId: sessionId,
+                dataPath: this.sessionsPath
+            }),
+            webVersionCache: {
+                type: "remote",
+                remotePath: this.remoteWaWebVersion,
+            },
+            puppeteer: puppeteerOptions
+        });
+
+        const sessionObj = {
+            sessionId,
+            client,
+            status: SESSION_STATUS.STARTING,
+            ready: false,
+            lastQr: null,
+            webhookUrl: config.webhookUrl || this.webhookUrl,
+            startedAt: new Date()
+        };
+
+        this.sessions.set(sessionId, sessionObj);
+        this._bindEvents(sessionId, sessionObj);
+
+        client.initialize();
+        this._updateStatus(sessionObj, SESSION_STATUS.STARTING);
+        return sessionObj;
+    }
+
+    _updateStatus(sessionObj, newStatus) {
+        sessionObj.status = newStatus;
+        console.log(`📌 [${sessionObj.sessionId}] Estado actualizado -> ${newStatus}`);
+
+        if (this.onStatusChange) {
+            try { this.onStatusChange(sessionObj.sessionId, newStatus); } catch (e) {}
+        }
+
+        this._sendWebhook(sessionObj, "session.status", {
+            sessionId: sessionObj.sessionId,
+            status: newStatus,
+            timestamp: new Date().toISOString()
+        });
+    }
+
+    _bindEvents(sessionId, sessionObj) {
+        const { client } = sessionObj;
+
+        client.on("qr", (qr) => {
+            console.log(`⚡ [${sessionId}] QR RECIBIDO. ESCANEA CON TU CELULAR:`);
+            qrcode.generate(qr, { small: true });
+            sessionObj.lastQr = qr;
+            sessionObj.ready = false;
+
+            this._updateStatus(sessionObj, SESSION_STATUS.SCAN_QR_CODE);
+
+            if (this.onQr) {
+                try { this.onQr(sessionId, qr); } catch (e) {}
+            }
+            this._sendWebhook(sessionObj, "qr", { sessionId, qr });
+        });
+
+        client.on("ready", () => {
+            console.log(`✅ [${sessionId}] WhatsApp CONECTADO Y OPERATIVO (WORKING)`);
+            sessionObj.lastQr = null;
+            sessionObj.ready = true;
+
+            this._updateStatus(sessionObj, SESSION_STATUS.WORKING);
+        });
+
+        client.on("auth_failure", (msg) => {
+            console.error(`❌ [${sessionId}] ERROR DE AUTENTICACIÓN:`, msg);
+            sessionObj.ready = false;
+
+            this._updateStatus(sessionObj, SESSION_STATUS.FAILED);
+        });
+
+        client.on("disconnected", (reason) => {
+            console.warn(`⚠️ [${sessionId}] DESCONECTADO:`, reason);
+            sessionObj.ready = false;
+
+            this._updateStatus(sessionObj, SESSION_STATUS.FAILED);
+        });
+
+        client.on("message_create", async (msg) => {
+            try {
+                if (this.onMessage) {
+                    await this.onMessage(sessionId, msg, this);
+                }
+
+                const msgIdStr = msg.id ? (msg.id._serialized || msg.id.$1 || msg.id) : null;
+                const hasMedia = !!(msg.hasMedia || msg.type === "ptt" || msg.type === "audio" || msg.type === "image" || msg.type === "video" || msg.type === "sticker" || msg.type === "document");
+                const mediaUrl = (hasMedia && msgIdStr) ? `http://localhost:3005/api/media/${msgIdStr}` : null;
+                const mimetype = msg.mimetype || (msg.type === "ptt" || msg.type === "audio" ? "audio/ogg; codecs=opus" : (msg.type === "image" ? "image/jpeg" : null));
+
+                const payload = {
+                    id: msgIdStr,
+                    from: msg.from,
+                    to: msg.to,
+                    fromMe: msg.fromMe,
+                    author: msg.author || msg.from,
+                    body: msg.body || "",
+                    hasMedia: hasMedia,
+                    type: msg.type || "chat",
+                    mediaUrl: mediaUrl,
+                    media: mediaUrl ? { url: mediaUrl, mimetype: mimetype } : null,
+                    mimetype: mimetype,
+                    timestamp: msg.timestamp,
+                    _data: {
+                        notifyName: msg._data ? (msg._data.notifyName || msg._data.pushname) : "",
+                        pushName: msg._data ? (msg._data.notifyName || msg._data.pushname) : ""
+                    }
+                };
+
+                // Enviar webhook 'message' y 'message.any' para compatibilidad completa con CRM BR
+                await this._sendWebhook(sessionObj, "message", payload);
+                await this._sendWebhook(sessionObj, "message.any", payload);
+
+            } catch (err) {
+                console.error(`❌ [${sessionId}] Error en procesador de mensajes:`, err.message);
+            }
+        });
+    }
+
+    async _sendWebhook(sessionObj, event, payload) {
+        const targetUrl = sessionObj.webhookUrl || this.webhookUrl;
+        if (!targetUrl) return;
+
+        try {
+            await axios.post(targetUrl, {
+                event,
+                session: sessionObj.sessionId,
+                payload
+            }, {
+                headers: { "Content-Type": "application/json" },
+                timeout: 15000  // aumentado a 15s para tolerar CRM lento al arrancar
+            });
+        } catch (e) {
+            console.log(`⚠️ [${sessionObj.sessionId}] No se pudo enviar Webhook (${event}) a ${targetUrl}: ${e.message}`);
+        }
+    }
+
+    /**
+     * Obtiene los chats recientes de WhatsApp con sus últimos mensajes.
+     * Útil para re-sincronizar conversaciones al CRM después de una reconexión.
+     */
+    async getChats(sessionId, limit = 20, messagesPerChat = 10) {
+        const session = this.sessions.get(sessionId);
+        if (!session || !session.client || session.status !== SESSION_STATUS.WORKING) {
+            throw new Error(`Sesión '${sessionId}' no está en estado WORKING.`);
+        }
+
+        const client = session.client;
+        const page = client.pupPage || (client.pupBrowser && (await client.pupBrowser.pages())[0]);
+        if (!page) throw new Error("No se pudo obtener la página de Puppeteer.");
+
+        const rawChats = await page.evaluate(async (maxChats, maxMsgs) => {
+            try {
+                const { Chat, Msg } = window.require('WAWebCollections');
+                const chatModels = Chat.getModelsArray();
+                const result = [];
+
+                for (const c of chatModels.slice(0, maxChats)) {
+                    const msgs = c.msgs ? c.msgs.getModelsArray().slice(-maxMsgs) : [];
+                    let chatPhoneJid = c.id ? (c.id._serialized || c.id) : "";
+
+                    if (chatPhoneJid.endsWith('@lid')) {
+                        const rawPhone = c.contact ? String(c.contact.phoneNumber || c.contact.phone || c.contact.id?.user || '') : '';
+                        const phoneDigits = rawPhone.replace(/\D/g, '');
+                        if (phoneDigits && phoneDigits.length >= 10 && phoneDigits.length <= 15) {
+                            chatPhoneJid = `${phoneDigits}@c.us`;
+                        } else {
+                            const authorMsg = msgs.find(m => m.author && (m.author._serialized || String(m.author)).endsWith('@c.us'));
+                            if (authorMsg) {
+                                chatPhoneJid = authorMsg.author._serialized || String(authorMsg.author);
+                            } else if (c.formattedTitle && c.formattedTitle.match(/\+?\d{10,15}/)) {
+                                chatPhoneJid = `${c.formattedTitle.replace(/\D/g, '')}@c.us`;
+                            }
+                        }
+                    }
+
+                    result.push({
+                        chatId: chatPhoneJid,
+                        name: c.formattedTitle || c.name || c.id.user || "",
+                        isGroup: !!c.isGroup,
+                        unreadCount: c.unreadCount || 0,
+                        timestamp: c.t || Math.floor(Date.now() / 1000),
+                        messages: msgs.map(m => {
+                            const serializedId = m.id ? (typeof m.id === 'string' ? m.id : (m.id._serialized || m.id.id)) : null;
+                            const fromMe = !!(m.id && m.id.fromMe);
+                            const remoteJid = chatPhoneJid;
+                            const fromJid = fromMe ? "me" : (m.from ? (m.from._serialized || m.from) : remoteJid);
+                            const toJid = fromMe ? (m.to ? (m.to._serialized || m.to) : remoteJid) : "me";
+                            const msgIdStr = serializedId || `sync_${remoteJid}_${m.t || Date.now()}`;
+
+                            let rawBody = m.body || m.caption || "";
+                            const isBase64Img = typeof rawBody === 'string' && (rawBody.startsWith('/9j/') || rawBody.startsWith('iVBORw0KGgo') || rawBody.startsWith('data:image'));
+                            const hasMedia = !!(m.isMedia || m.mediaData || isBase64Img || m.type === "ptt" || m.type === "audio" || m.type === "image" || m.type === "video" || m.type === "sticker" || m.type === "document");
+                            
+                            let msgType = m.type || (hasMedia ? (m.isSticker ? "sticker" : (isBase64Img ? "image" : "audio")) : "chat");
+                            if (isBase64Img) msgType = "image";
+
+                            const mediaUrl = hasMedia ? `http://localhost:3005/api/media/${msgIdStr}` : null;
+                            const mimetype = m.mimetype || (msgType === "image" ? "image/jpeg" : (msgType === "ptt" || msgType === "audio" ? "audio/ogg; codecs=opus" : null));
+
+                            return {
+                                id: msgIdStr,
+                                from: fromJid,
+                                to: toJid,
+                                fromMe: fromMe,
+                                author: m.author ? (m.author._serialized || m.author) : fromJid,
+                                body: isBase64Img ? "" : rawBody,
+                                rawBase64: isBase64Img ? rawBody : null,
+                                hasMedia: hasMedia,
+                                type: msgType,
+                                mediaUrl: mediaUrl,
+                                media: mediaUrl ? { url: mediaUrl, mimetype: mimetype } : null,
+                                mimetype: mimetype,
+                                timestamp: m.t || Math.floor(Date.now() / 1000),
+                                _data: {
+                                    notifyName: m.sender ? (m.sender.pushname || m.sender.name || "") : "",
+                                    pushName: m.sender ? (m.sender.pushname || m.sender.name || "") : ""
+                                }
+                            };
+                        })
+                    });
+                }
+                return result;
+            } catch (e) {
+                return { error: e.message };
+            }
+        }, limit, messagesPerChat);
+
+        if (rawChats && rawChats.error) {
+            throw new Error(`Error extrayendo chats de WhatsApp Web: ${rawChats.error}`);
+        }
+
+        return rawChats || [];
+    }
+
+    /**
+     * Re-envía los mensajes de los chats recientes al webhook del CRM.
+     * Permite recuperar conversaciones que se perdieron por timeouts al arrancar.
+     */
+    async syncChatsToWebhook(sessionId, limit = 20, messagesPerChat = 5) {
+        const sessionObj = this.sessions.get(sessionId);
+        if (!sessionObj) throw new Error(`Sesión '${sessionId}' no encontrada.`);
+
+        const chats = await this.getChats(sessionId, limit, messagesPerChat);
+        let sent = 0;
+        let errors = 0;
+
+        for (const chat of chats) {
+            for (const msg of chat.messages) {
+                try {
+                    await this._sendWebhook(sessionObj, "message", msg);
+                    await this._sendWebhook(sessionObj, "message.any", msg);
+                    sent++;
+                } catch (e) {
+                    errors++;
+                }
+            }
+        }
+
+        console.log(`🔄 [${sessionId}] Sync completado: ${sent} mensajes reenviados al CRM. Errores: ${errors}`);
+        return { chats: chats.length, sent, errors };
+    }
+
+    async downloadMedia(sessionId, msg) {
+        const session = this.sessions.get(sessionId);
+        if (!session || !session.client) return null;
+
+        const msgIdStr = typeof msg === "string" ? msg : (msg ? (msg.id ? (msg.id._serialized || msg.id.$1 || msg.id) : String(msg)) : "");
+
+        try {
+            if (msg && typeof msg.downloadMedia === "function") {
+                const standardMedia = await msg.downloadMedia();
+                if (standardMedia && standardMedia.data) {
+                    return standardMedia;
+                }
+            }
+        } catch (e) {
+            console.log(`ℹ️ [${sessionId}] downloadMedia estándar falló, aplicando Parche $1 de IndexedDB...`);
+        }
+
+        try {
+            const page = session.client.pupPage || (session.client.pupBrowser && (await session.client.pupBrowser.pages())[0]);
+            if (!page) return null;
+
+            const mediaResult = await page.evaluate(async (targetId) => {
+                const { Msg } = window.require('WAWebCollections');
+                let message = Msg.getModelsArray().find(m => 
+                    m.id && (m.id._serialized === targetId || m.id.$1 === targetId || m.id.id === targetId)
+                );
+
+                if (!message) {
+                    try {
+                        const dbRes = await Msg.getMessagesById([targetId]);
+                        if (dbRes && dbRes.messages && dbRes.messages[0]) {
+                            message = dbRes.messages[0];
+                        }
+                    } catch (e) {}
+                }
+
+                if (!message) return { error: "Mensaje no encontrado en WAWebCollections: " + targetId };
+
+                try {
+                    await message.downloadMedia({
+                        downloadEvenIfExpensive: true,
+                        rmrReason: 1,
+                        isUserInitiated: true,
+                    });
+                } catch(e) {}
+
+                let blob;
+                const cached = window.require('WAWebMediaInMemoryBlobCache')?.InMemoryMediaBlobCache?.get(message.mediaObject?.filehash);
+                if (cached) {
+                    blob = cached;
+                } else if (message.mediaObject?.mediaBlob) {
+                    blob = message.mediaObject.mediaBlob.forceToBlob();
+                } else if (message.body && typeof message.body === 'string' && (message.body.startsWith('/9j/') || message.body.startsWith('iVBORw0KGgo'))) {
+                    const mime = message.body.startsWith('/9j/') ? "image/jpeg" : "image/png";
+                    return {
+                        data: message.body,
+                        mimetype: mime,
+                        filename: "imagen.jpg",
+                        filesize: message.body.length
+                    };
+                }
+
+                if (!blob) return { error: "No se pudo extraer el Blob de la imagen o audio." };
+
+                const data = await window.WWebJS.arrayBufferToBase64Async(await blob.arrayBuffer());
+                return {
+                    data,
+                    mimetype: message.mimetype || "audio/ogg; codecs=opus",
+                    filename: message.filename || "audio.ogg",
+                    filesize: message.size
+                };
+            }, msgIdStr);
+
+            if (mediaResult && !mediaResult.error) {
+                console.log(`✅ [${sessionId}] Media descargada exitosamente para ID ${msgIdStr}`);
+                return mediaResult;
+            } else {
+                console.error(`❌ [${sessionId}] Error en extraction media evaluate:`, mediaResult ? mediaResult.error : "resultado nulo");
+            }
+        } catch (err) {
+            console.error(`❌ [${sessionId}] Error aplicando Parche Anti-Ofuscación:`, err.message);
+        }
+
+        return null;
+    }
+
+    async getScreenshot(sessionId) {
+        const session = this.sessions.get(sessionId);
+        if (!session || !session.client) {
+            return null;
+        }
+
+        try {
+            const client = session.client;
+            let page = client.pupPage;
+            
+            if (!page && client.pupBrowser) {
+                const pages = await client.pupBrowser.pages();
+                if (pages && pages.length > 0) {
+                    page = pages[0];
+                }
+            }
+
+            if (page) {
+                const screenshotBuffer = await page.screenshot({ type: "png" });
+                console.log(`📸 Screenshot capturada exitosamente para [${sessionId}]`);
+                return screenshotBuffer;
+            } else {
+                return null;
+            }
+        } catch (err) {
+            console.error(`❌ Error tomando screenshot de [${sessionId}]:`, err.message);
+            return null;
+        }
+    }
+
+    async sendMessage(sessionId, chatId, text) {
+        const session = this.sessions.get(sessionId);
+        if (!session || session.status !== SESSION_STATUS.WORKING) {
+            throw new Error(`La sesión '${sessionId}' no está activa o lista (Estado actual: ${session ? session.status : 'NO_EXISTE'}).`);
+        }
+
+        let targetJid = chatId;
+        if (targetJid && !targetJid.includes("@")) {
+            targetJid = `${targetJid.replace(/\D/g, "")}@c.us`;
+        }
+
+        const result = await session.client.sendMessage(targetJid, text);
+        return result || { id: { _serialized: `true_${targetJid}_${Date.now()}` } };
+    }
+
+    async sendMedia(sessionId, chatId, fileSource, filename, caption = "") {
+        const session = this.sessions.get(sessionId);
+        if (!session || session.status !== SESSION_STATUS.WORKING) {
+            throw new Error(`La sesión '${sessionId}' no está en estado WORKING.`);
+        }
+
+        let targetJid = chatId;
+        if (targetJid && !targetJid.includes("@")) {
+            targetJid = `${targetJid.replace(/\D/g, "")}@c.us`;
+        }
+
+        let media;
+        if (Buffer.isBuffer(fileSource)) {
+            const mimetype = require("mime-types").lookup(filename) || "application/octet-stream";
+            media = new MessageMedia(mimetype, fileSource.toString("base64"), filename);
+        } else {
+            media = MessageMedia.fromFilePath(fileSource);
+        }
+
+        const result = await session.client.sendMessage(targetJid, media, { caption });
+        return result || { id: { _serialized: `true_${targetJid}_${Date.now()}` } };
+    }
+
+    async stopSession(sessionId) {
+        const session = this.sessions.get(sessionId);
+        if (session) {
+            try {
+                await session.client.destroy();
+            } catch (e) {}
+            this._updateStatus(session, SESSION_STATUS.STOPPED);
+            this.sessions.delete(sessionId);
+            console.log(`🛑 Sesión [${sessionId}] detenida.`);
+            return true;
+        }
+        return false;
+    }
+
+    static resetSessionFiles(sessionId, sessionsPath = "./sessions") {
+        const sessionFolder = path.resolve(sessionsPath, `session-${sessionId}`);
+        if (fs.existsSync(sessionFolder)) {
+            fs.rmSync(sessionFolder, { recursive: true, force: true });
+            console.log(`🗑️ Carpeta de sesión eliminada: ${sessionFolder}`);
+            return true;
+        }
+        return false;
+    }
+
+    _getSessionMeInfo(sessionObj) {
+        if (!sessionObj.ready || !sessionObj.client || !sessionObj.client.info) {
+            return null;
+        }
+        const info = sessionObj.client.info;
+        const wid = info.wid ? info.wid._serialized : null;
+        const pushName = info.pushname || "";
+        return wid ? { id: wid, pushName } : null;
+    }
+
+    getSessionsList() {
+        const list = [];
+        for (const [id, s] of this.sessions.entries()) {
+            list.push({
+                name: id,
+                sessionId: id,
+                status: s.status,
+                ready: s.ready,
+                hasQr: !!s.lastQr,
+                qr: s.lastQr,
+                me: this._getSessionMeInfo(s),
+                webhookUrl: s.webhookUrl,
+                startedAt: s.startedAt
+            });
+        }
+        return list;
+    }
+
+    getSession(sessionId) {
+        const s = this.sessions.get(sessionId);
+        if (!s) return null;
+        return {
+            ...s,
+            name: sessionId,
+            me: this._getSessionMeInfo(s)
+        };
+    }
+}
+
+module.exports = { WhatsAppMultiManager, SESSION_STATUS };
