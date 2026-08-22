@@ -19,6 +19,7 @@ const prefixes = {
   testRun: "run",
   testCase: "case",
   mediaAsset: "ma",
+  channelAccount: "chn",
 } as const;
 
 export type IdKind = keyof typeof prefixes;

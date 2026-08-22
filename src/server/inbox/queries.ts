@@ -3,20 +3,7 @@ import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import { isWindowOpen, windowRemainingMs } from "@/server/inbox/window";
 
-export type ConversationDto = {
-  id: string;
-  contact: { id: string; name: string; phone: string | null };
-  stageName: string | null;
-  aiEnabled: boolean;
-  handoffAt: string | null;
-  handoffReason: string | null;
-  lastInboundAt: string | null;
-  lastMessageAt: string | null;
-  unreadCount: number;
-  windowOpen: boolean;
-  windowRemainingMs: number;
-  preview: string | null;
-};
+import type { ConversationDto } from "@/lib/types";
 
 export async function listConversations(
   organizationId: string,
@@ -120,6 +107,7 @@ export function serializeConversation(
   return {
     id: c.id,
     contact: { id: contact.id, name: contact.name, phone: contact.phone },
+    platform: c.platform || contact.platform || "whatsapp",
     stageName,
     aiEnabled: c.aiEnabled,
     handoffAt: c.handoffAt?.toISOString() ?? null,

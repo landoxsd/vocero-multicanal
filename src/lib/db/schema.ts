@@ -105,6 +105,46 @@ export const invitation = pgTable("invitation", {
  * Dominio (toda tabla lleva organization_id NOT NULL + índice org-first)
  * ============================================================ */
 
+export const channelAccount = pgTable(
+  "channel_account",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    provider: text("provider", {
+      enum: [
+        "whatsapp_web",
+        "whatsapp_cloud",
+        "instagram",
+        "mercadolibre",
+        "facebook_messenger",
+      ],
+    }).notNull(),
+    name: text("name").notNull(),
+    status: text("status", {
+      enum: ["connected", "connecting", "scan_qr", "disconnected", "error"],
+    })
+      .notNull()
+      .default("disconnected"),
+    phoneNumber: text("phone_number"),
+    accountIdentifier: text("account_identifier"),
+    qrCode: text("qr_code"),
+    credentialsCipher: text("credentials_cipher"),
+    credentialsIv: text("credentials_iv"),
+    credentialsTag: text("credentials_tag"),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    errorMessage: text("error_message"),
+    lastConnectedAt: timestamp("last_connected_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("channel_org_idx").on(t.organizationId),
+    index("channel_provider_idx").on(t.organizationId, t.provider),
+  ]
+);
+
 export const contact = pgTable(
   "contact",
   {
@@ -112,6 +152,16 @@ export const contact = pgTable(
     organizationId: text("organization_id")
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
+    channelAccountId: text("channel_account_id").references(
+      () => channelAccount.id,
+      { onDelete: "set null" }
+    ),
+    platform: text("platform", {
+      enum: ["whatsapp", "instagram", "mercadolibre", "facebook"],
+    })
+      .notNull()
+      .default("whatsapp"),
+    externalId: text("external_id"),
     /**
      * Llave de resolución WhatsApp (003): teléfono normalizado (521→52) o
      * `bsuid:<id>` cuando Meta no manda wa_id. Estable de por vida.
@@ -304,6 +354,15 @@ export const conversation = pgTable(
     contactId: text("contact_id")
       .notNull()
       .references(() => contact.id, { onDelete: "cascade" }),
+    channelAccountId: text("channel_account_id").references(
+      () => channelAccount.id,
+      { onDelete: "set null" }
+    ),
+    platform: text("platform", {
+      enum: ["whatsapp", "instagram", "mercadolibre", "facebook"],
+    })
+      .notNull()
+      .default("whatsapp"),
     /** Conversación del Laboratorio: jamás toca la API de WhatsApp. */
     isTest: boolean("is_test").notNull().default(false),
     aiEnabled: boolean("ai_enabled").notNull().default(true),
@@ -332,6 +391,7 @@ export const conversation = pgTable(
       .on(t.organizationId, t.contactId)
       .where(sql`${t.isTest} = false`),
     index("conversation_org_last_idx").on(t.organizationId, t.lastMessageAt),
+    index("conversation_channel_idx").on(t.organizationId, t.channelAccountId),
   ]
 );
 
@@ -345,8 +405,17 @@ export const message = pgTable(
     conversationId: text("conversation_id")
       .notNull()
       .references(() => conversation.id, { onDelete: "cascade" }),
+    channelAccountId: text("channel_account_id").references(
+      () => channelAccount.id,
+      { onDelete: "set null" }
+    ),
+    platform: text("platform", {
+      enum: ["whatsapp", "instagram", "mercadolibre", "facebook"],
+    }),
     /** ID de WhatsApp — UNIQUE (idempotencia). Nullable en salientes de prueba. */
     waMessageId: text("wa_message_id").unique(),
+    /** ID en plataformas externas (Instagram, MeLi, FB) */
+    externalMessageId: text("external_message_id"),
     direction: text("direction", { enum: ["in", "out"] }).notNull(),
     type: text("type").notNull().default("text"),
     text: text("text"),
@@ -371,6 +440,7 @@ export const message = pgTable(
     mediaAssetId: text("media_asset_id").references(() => mediaAsset.id, {
       onDelete: "set null",
     }),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>(),
     waTimestamp: timestamp("wa_timestamp"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
@@ -380,6 +450,7 @@ export const message = pgTable(
       t.conversationId,
       t.createdAt
     ),
+    index("message_channel_idx").on(t.organizationId, t.channelAccountId),
   ]
 );
 

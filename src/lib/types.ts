@@ -3,6 +3,8 @@
 export type ConversationDto = {
   id: string;
   contact: { id: string; name: string; phone: string | null };
+  platform?: "whatsapp" | "instagram" | "mercadolibre" | "facebook" | string | null;
+  channelName?: string | null;
   stageName: string | null;
   aiEnabled: boolean;
   handoffAt: string | null;
@@ -38,6 +40,7 @@ export type MessageMediaDto = {
 export type MessageDto = {
   id: string;
   conversationId: string;
+  platform?: "whatsapp" | "instagram" | "mercadolibre" | "facebook" | string | null;
   direction: "in" | "out";
   type: string;
   text: string | null;
