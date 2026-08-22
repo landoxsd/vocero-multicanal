@@ -84,10 +84,14 @@ export class WhatsAppWebAdapter implements ChannelProviderAdapter {
   async getStatus(account: ChannelAccountRecord): Promise<ChannelStatus> {
     const sessionId = account.accountIdentifier || account.id;
     try {
-      const res = await fetch(`${this.managerUrl}/api/sessions/${sessionId}/status`);
+      const res = await fetch(`${this.managerUrl}/api/sessions/${sessionId}`);
       if (!res.ok) return "disconnected";
       const data = await res.json();
-      return (data.status as ChannelStatus) || "disconnected";
+      const rawStatus = (data.status as string) || "";
+      if (rawStatus === "WORKING" || data.ready) return "connected";
+      if (rawStatus === "SCAN_QR_CODE" || data.hasQr) return "scan_qr";
+      if (rawStatus === "STARTING") return "connecting";
+      return "disconnected";
     } catch {
       return "disconnected";
     }
@@ -96,10 +100,10 @@ export class WhatsAppWebAdapter implements ChannelProviderAdapter {
   async getQrCode(account: ChannelAccountRecord): Promise<string | null> {
     const sessionId = account.accountIdentifier || account.id;
     try {
-      const res = await fetch(`${this.managerUrl}/api/sessions/${sessionId}/qr`);
+      const res = await fetch(`${this.managerUrl}/api/sessions/${sessionId}`);
       if (!res.ok) return null;
       const data = await res.json();
-      return data.qrCode || data.qr || null;
+      return data.qr || data.qrCode || data.lastQr || null;
     } catch {
       return null;
     }
@@ -119,9 +123,14 @@ export class WhatsAppWebAdapter implements ChannelProviderAdapter {
       }),
     });
     const data = await res.json();
+    const rawStatus = (data.status as string) || "";
+    let status: ChannelStatus = "connecting";
+    if (rawStatus === "WORKING" || data.ready) status = "connected";
+    else if (rawStatus === "SCAN_QR_CODE" || data.qr) status = "scan_qr";
+
     return {
       qrCode: data.qr || data.qrCode,
-      status: (data.status as ChannelStatus) || "connecting",
+      status,
     };
   }
 
