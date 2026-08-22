@@ -13,7 +13,6 @@ import {
   CheckCircle2,
   AlertCircle,
   X,
-  ExternalLink,
 } from "lucide-react";
 import { ChannelBadge } from "@/components/channels/channel-badge";
 
@@ -412,6 +411,7 @@ export default function ChannelsSettingsPage() {
                 ) : activeChannel.qrCode ? (
                   <div className="flex flex-col items-center justify-center p-4 bg-white rounded-xl border inline-block mx-auto shadow-inner">
                     {/* Renderizado de código QR */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={`https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(
                         activeChannel.qrCode

@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { parseBody, withAuth } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { WhatsAppWebAdapter } from "@/server/channels/whatsapp-web/provider";
