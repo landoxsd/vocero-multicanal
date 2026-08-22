@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { graphRequest, MetaApiError, normalizeRecipient } from "@/lib/meta/client";
@@ -15,6 +15,8 @@ import {
   uploadGraphMedia,
   validateOutgoing,
 } from "@/server/whatsapp/media";
+import { omniChannelManager } from "@/server/channels/omnichannel-manager";
+import type { ChannelAccountRecord } from "@/server/channels/types";
 
 /** Error tipado del envío; `code` mapea a HTTP en la capa de API. */
 export class SendError extends Error {
@@ -40,7 +42,8 @@ type SendResult = { messageId: string };
 
 type SendTarget = {
   conversation: typeof schema.conversation.$inferSelect;
-  credentials: Credentials;
+  channelAccount: ChannelAccountRecord | null;
+  credentials: Credentials | null;
   recipient: string;
 };
 
@@ -78,37 +81,65 @@ async function prepareSend(
     );
   }
 
-  if (!isWindowOpen(row.conversation.lastInboundAt)) {
+  // 1. Buscar canal omnicanal asignado a la conversación o primer canal activo
+  let channelAccount: ChannelAccountRecord | null = null;
+  if (row.conversation.channelAccountId) {
+    const [ca] = await db
+      .select()
+      .from(schema.channelAccount)
+      .where(eq(schema.channelAccount.id, row.conversation.channelAccountId))
+      .limit(1);
+    channelAccount = ca ?? null;
+  }
+  if (!channelAccount) {
+    const [ca] = await db
+      .select()
+      .from(schema.channelAccount)
+      .where(
+        and(
+          eq(schema.channelAccount.organizationId, organizationId),
+          eq(schema.channelAccount.status, "connected")
+        )
+      )
+      .limit(1);
+    channelAccount = ca ?? null;
+  }
+
+  let credentials: Credentials | null = null;
+  if (!channelAccount) {
+    credentials = await getCredentialsByOrg(organizationId);
+    if (credentials && credentials.status === "reconnect_required") {
+      throw new SendError(
+        "reconnect_required",
+        "El token de WhatsApp expiró: reconecta el número en Configuración"
+      );
+    }
+  }
+
+  if (!channelAccount && !credentials) {
+    throw new SendError("not_connected", "No hay número de WhatsApp conectado");
+  }
+
+  // Para canales Cloud API, validar ventana de 24h
+  if (!channelAccount && !isWindowOpen(row.conversation.lastInboundAt)) {
     throw new SendError(
       "window_closed",
       "La ventana de 24 horas está cerrada; usa una plantilla aprobada"
     );
   }
 
-  const credentials = await getCredentialsByOrg(organizationId);
-  if (!credentials) {
-    throw new SendError("not_connected", "No hay número de WhatsApp conectado");
-  }
-  if (credentials.status === "reconnect_required") {
-    throw new SendError(
-      "reconnect_required",
-      "El token de WhatsApp expiró: reconecta el número en Configuración"
-    );
-  }
-
-  // 003: el destinatario es el teléfono normalizado o, si el contacto llegó
-  // por BSUID sin teléfono, su Business-Scoped User ID.
+  // Destinatario: teléfono o identificador externo
   const recipient = row.contact.phone
     ? normalizeRecipient(row.contact.phone)
-    : row.contact.waUserId;
+    : row.contact.externalId || row.contact.waUserId;
   if (!recipient) {
     throw new SendError(
       "meta_error",
-      "El contacto no tiene teléfono ni identidad de WhatsApp utilizable"
+      "El contacto no tiene teléfono ni identificador utilizable"
     );
   }
 
-  return { conversation: row.conversation, credentials, recipient };
+  return { conversation: row.conversation, channelAccount, credentials, recipient };
 }
 
 async function persistOutbound(input: {
@@ -160,24 +191,38 @@ async function persistOutbound(input: {
   return message.id;
 }
 
-/** Envía un mensaje de texto libre por WhatsApp. */
+/** Envía un mensaje de texto libre por WhatsApp u otro canal omnicanal. */
 export async function sendText(input: {
   conversationId: string;
   organizationId: string;
   text: string;
   aiGenerated?: boolean;
 }): Promise<SendResult> {
-  const { credentials, recipient } = await prepareSend(
+  const { channelAccount, credentials, recipient } = await prepareSend(
     input.conversationId,
     input.organizationId
   );
 
-  const waMessageId = await callGraphSend(credentials, {
-    messaging_product: "whatsapp",
-    to: recipient,
-    type: "text",
-    text: { body: input.text },
-  });
+  let waMessageId: string | null = null;
+
+  if (channelAccount) {
+    const res = await omniChannelManager.sendOutboundMessage(channelAccount, {
+      channelAccountId: channelAccount.id,
+      recipientId: recipient,
+      text: input.text,
+    });
+    if (!res.success) {
+      throw new SendError("meta_error", res.error || "Fallo enviando mensaje por canal omnicanal");
+    }
+    waMessageId = res.externalMessageId || `chn_${Date.now()}`;
+  } else if (credentials) {
+    waMessageId = await callGraphSend(credentials, {
+      messaging_product: "whatsapp",
+      to: recipient,
+      type: "text",
+      text: { body: input.text },
+    });
+  }
 
   const messageId = await persistOutbound({
     organizationId: input.organizationId,
@@ -208,7 +253,7 @@ export async function sendMediaMessage(input: {
   // Validación previa (FR-007): tipo y tamaño antes de tocar disco o red.
   const kind = validateOutgoing(input.file.mimeType, input.file.data.byteLength);
 
-  const { credentials, recipient } = await prepareSend(
+  const { channelAccount, credentials, recipient } = await prepareSend(
     input.conversationId,
     input.organizationId
   );
@@ -237,30 +282,47 @@ export async function sendMediaMessage(input: {
   const asset = assetRows[0]!;
 
   try {
-    const waMediaId = await uploadGraphMedia(credentials, input.file);
-    await db
-      .update(schema.mediaAsset)
-      .set({ waMediaId, updatedAt: new Date() })
-      .where(eq(schema.mediaAsset.id, assetId));
+    let waMessageId: string | null = null;
 
-    const mediaPayload: Record<string, unknown> = { id: waMediaId };
-    if (input.caption && kind !== "audio") mediaPayload.caption = input.caption;
-    if (kind === "document" && input.file.fileName) {
-      mediaPayload.filename = input.file.fileName;
+    if (channelAccount) {
+      const res = await omniChannelManager.sendOutboundMessage(channelAccount, {
+        channelAccountId: channelAccount.id,
+        recipientId: recipient,
+        text: input.caption || "",
+        mediaUrl: `/api/media/${assetId}`,
+        mediaType: kind,
+        fileName: input.file.fileName,
+      });
+      if (!res.success) {
+        throw new SendError("upload_failed", res.error || "Fallo al enviar multimedia por canal");
+      }
+      waMessageId = res.externalMessageId || `chn_${Date.now()}`;
+    } else if (credentials) {
+      const waMediaId = await uploadGraphMedia(credentials, input.file);
+      await db
+        .update(schema.mediaAsset)
+        .set({ waMediaId, updatedAt: new Date() })
+        .where(eq(schema.mediaAsset.id, assetId));
+
+      const mediaPayload: Record<string, unknown> = { id: waMediaId };
+      if (input.caption && kind !== "audio") mediaPayload.caption = input.caption;
+      if (kind === "document" && input.file.fileName) {
+        mediaPayload.filename = input.file.fileName;
+      }
+      waMessageId = await callGraphSend(credentials, {
+        messaging_product: "whatsapp",
+        to: recipient,
+        type: kind,
+        [kind]: mediaPayload,
+      });
     }
-    const waMessageId = await callGraphSend(credentials, {
-      messaging_product: "whatsapp",
-      to: recipient,
-      type: kind,
-      [kind]: mediaPayload,
-    });
 
     const messageId = await persistOutbound({
       organizationId: input.organizationId,
       conversationId: input.conversationId,
       waMessageId,
       type: kind,
-      text: null,
+      text: input.caption ?? null,
       status: "pending",
       origin: "operator",
       mediaAssetId: assetId,
@@ -320,7 +382,7 @@ export async function sendStructured(
     | { kind: "contacts"; contacts: ContactInput[] }
   )
 ): Promise<SendResult> {
-  const { credentials, recipient } = await prepareSend(
+  const { channelAccount, credentials, recipient } = await prepareSend(
     input.conversationId,
     input.organizationId
   );
@@ -336,11 +398,25 @@ export async function sendStructured(
           })),
         };
 
-  const waMessageId = await callGraphSend(credentials, {
-    messaging_product: "whatsapp",
-    to: recipient,
-    ...payload,
-  });
+  let waMessageId: string | null = null;
+  if (channelAccount) {
+    const textDesc =
+      input.kind === "location"
+        ? `📍 Ubicación: ${input.location.name || ""} https://maps.google.com/?q=${input.location.latitude},${input.location.longitude}`
+        : `👤 Contacto: ${input.contacts.map((c) => `${c.name} (${c.phone})`).join(", ")}`;
+    const res = await omniChannelManager.sendOutboundMessage(channelAccount, {
+      channelAccountId: channelAccount.id,
+      recipientId: recipient,
+      text: textDesc,
+    });
+    waMessageId = res.externalMessageId || `chn_${Date.now()}`;
+  } else if (credentials) {
+    waMessageId = await callGraphSend(credentials, {
+      messaging_product: "whatsapp",
+      to: recipient,
+      ...payload,
+    });
+  }
 
   const db = getDb();
   const assetRows = await db
