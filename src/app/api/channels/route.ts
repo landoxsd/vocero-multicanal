@@ -33,6 +33,27 @@ export const GET = withAuth(async (session) => {
     .where(eq(schema.channelAccount.organizationId, session.organizationId))
     .orderBy(schema.channelAccount.createdAt);
 
+  const waAdapter = new WhatsAppWebAdapter();
+  for (const channel of channels) {
+    if (channel.provider === "whatsapp_web") {
+      const liveStatus = await waAdapter.getStatus(channel);
+      if (liveStatus === "connected" && channel.status !== "connected") {
+        await db
+          .update(schema.channelAccount)
+          .set({
+            status: "connected",
+            qrCode: null,
+            errorMessage: null,
+            lastConnectedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(schema.channelAccount.id, channel.id));
+        channel.status = "connected";
+        channel.qrCode = null;
+      }
+    }
+  }
+
   return Response.json({ channels });
 });
 

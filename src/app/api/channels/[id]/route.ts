@@ -28,17 +28,33 @@ export const GET = withAuth(async (session, _req: Request, ctx: Params) => {
 
   if (!channel) return apiError(404, "not_found", "Canal no encontrado");
 
-  // Si es WhatsApp Web y no está conectado, consultar QR en vivo
+  // Si es WhatsApp Web y no está conectado, consultar estado y QR en vivo
   if (channel.provider === "whatsapp_web" && channel.status !== "connected") {
     const waAdapter = new WhatsAppWebAdapter();
-    const liveQr = await waAdapter.getQrCode(channel);
-    if (liveQr && liveQr !== channel.qrCode) {
+    const liveStatus = await waAdapter.getStatus(channel);
+    if (liveStatus === "connected") {
       await db
         .update(schema.channelAccount)
-        .set({ qrCode: liveQr, status: "scan_qr", updatedAt: new Date() })
+        .set({
+          status: "connected",
+          qrCode: null,
+          errorMessage: null,
+          lastConnectedAt: new Date(),
+          updatedAt: new Date(),
+        })
         .where(eq(schema.channelAccount.id, id));
-      channel.qrCode = liveQr;
-      channel.status = "scan_qr";
+      channel.status = "connected";
+      channel.qrCode = null;
+    } else {
+      const liveQr = await waAdapter.getQrCode(channel);
+      if (liveQr && liveQr !== channel.qrCode) {
+        await db
+          .update(schema.channelAccount)
+          .set({ qrCode: liveQr, status: "scan_qr", updatedAt: new Date() })
+          .where(eq(schema.channelAccount.id, id));
+        channel.qrCode = liveQr;
+        channel.status = "scan_qr";
+      }
     }
   }
 
