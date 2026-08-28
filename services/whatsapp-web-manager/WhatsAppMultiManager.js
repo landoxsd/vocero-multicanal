@@ -514,12 +514,33 @@ class WhatsAppMultiManager {
         }
 
         let targetJid = chatId;
-        if (targetJid && !targetJid.includes("@")) {
-            targetJid = `${targetJid.replace(/\D/g, "")}@c.us`;
+        const cleanPhone = (targetJid || "").replace(/@.*$/, "").replace(/\D/g, "");
+
+        if (!targetJid.endsWith("@g.us") && cleanPhone) {
+            try {
+                const numberDetails = await session.client.getNumberId(cleanPhone);
+                if (numberDetails && numberDetails._serialized) {
+                    targetJid = numberDetails._serialized;
+                } else if (!targetJid.includes("@")) {
+                    targetJid = `${cleanPhone}@c.us`;
+                }
+            } catch (e) {
+                if (!targetJid.includes("@")) {
+                    targetJid = `${cleanPhone}@c.us`;
+                }
+            }
         }
 
-        const result = await session.client.sendMessage(targetJid, text);
-        return result || { id: { _serialized: `true_${targetJid}_${Date.now()}` } };
+        try {
+            const result = await session.client.sendMessage(targetJid, text);
+            return result || { id: { _serialized: `true_${targetJid}_${Date.now()}` } };
+        } catch (err) {
+            const msg = err ? (err.message || String(err)) : "Error desconocido";
+            if (msg.includes("No LID for user") || msg.includes("Evaluation failed")) {
+                throw new Error(`El número (${cleanPhone || chatId}) no existe en WhatsApp o es un identificador de prueba no válido.`);
+            }
+            throw err;
+        }
     }
 
     async sendMedia(sessionId, chatId, fileSource, filename, caption = "") {
@@ -529,8 +550,21 @@ class WhatsAppMultiManager {
         }
 
         let targetJid = chatId;
-        if (targetJid && !targetJid.includes("@")) {
-            targetJid = `${targetJid.replace(/\D/g, "")}@c.us`;
+        const cleanPhone = (targetJid || "").replace(/@.*$/, "").replace(/\D/g, "");
+
+        if (!targetJid.endsWith("@g.us") && cleanPhone) {
+            try {
+                const numberDetails = await session.client.getNumberId(cleanPhone);
+                if (numberDetails && numberDetails._serialized) {
+                    targetJid = numberDetails._serialized;
+                } else if (!targetJid.includes("@")) {
+                    targetJid = `${cleanPhone}@c.us`;
+                }
+            } catch (e) {
+                if (!targetJid.includes("@")) {
+                    targetJid = `${cleanPhone}@c.us`;
+                }
+            }
         }
 
         let media;
@@ -541,8 +575,16 @@ class WhatsAppMultiManager {
             media = MessageMedia.fromFilePath(fileSource);
         }
 
-        const result = await session.client.sendMessage(targetJid, media, { caption });
-        return result || { id: { _serialized: `true_${targetJid}_${Date.now()}` } };
+        try {
+            const result = await session.client.sendMessage(targetJid, media, { caption });
+            return result || { id: { _serialized: `true_${targetJid}_${Date.now()}` } };
+        } catch (err) {
+            const msg = err ? (err.message || String(err)) : "Error desconocido";
+            if (msg.includes("No LID for user") || msg.includes("Evaluation failed")) {
+                throw new Error(`El número (${cleanPhone || chatId}) no existe en WhatsApp o es un identificador de prueba no válido.`);
+            }
+            throw err;
+        }
     }
 
     async stopSession(sessionId) {
