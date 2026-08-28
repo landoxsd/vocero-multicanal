@@ -6,7 +6,6 @@ import { scoped } from "@/lib/db/tenant";
 import { getContactById } from "@/server/contacts";
 import { getOrCreateConversation } from "@/server/inbox/ingest";
 import { SendError, sendText } from "@/server/inbox/send";
-import { isWindowOpen } from "@/server/inbox/window";
 import {
   sendTemplate,
   TemplateError,
