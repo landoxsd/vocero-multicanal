@@ -134,6 +134,24 @@ export class WhatsAppWebAdapter implements ChannelProviderAdapter {
     };
   }
 
+  async syncChats(
+    account: ChannelAccountRecord
+  ): Promise<{ success: boolean; chats?: number; sent?: number }> {
+    const sessionId = account.accountIdentifier || account.id;
+    try {
+      const res = await fetch(`${this.managerUrl}/api/sessions/${sessionId}/sync-chats`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 50, msgs: 10 }),
+      });
+      if (!res.ok) return { success: false };
+      const data = await res.json();
+      return { success: true, chats: data.chats, sent: data.sent };
+    } catch {
+      return { success: false };
+    }
+  }
+
   async disconnect(account: ChannelAccountRecord): Promise<void> {
     const sessionId = account.accountIdentifier || account.id;
     try {

@@ -213,6 +213,20 @@ class WhatsAppMultiManager {
                     await this.onMessage(sessionId, msg, this);
                 }
 
+                let fromJid = msg.from;
+                let notifyName = msg._data ? (msg._data.notifyName || msg._data.pushname) : "";
+
+                // Si el remitente es un LID (@lid), resolver el contacto para obtener su número real
+                if (fromJid && fromJid.endsWith("@lid")) {
+                    try {
+                        const contact = await msg.getContact();
+                        if (contact) {
+                            if (contact.number) fromJid = `${contact.number}@c.us`;
+                            if (contact.name || contact.pushname) notifyName = contact.name || contact.pushname;
+                        }
+                    } catch (e) {}
+                }
+
                 const msgIdStr = msg.id ? (msg.id._serialized || msg.id.$1 || msg.id) : null;
                 const hasMedia = !!(msg.hasMedia || msg.type === "ptt" || msg.type === "audio" || msg.type === "image" || msg.type === "video" || msg.type === "sticker" || msg.type === "document");
                 const mediaUrl = (hasMedia && msgIdStr) ? `http://localhost:3005/api/media/${msgIdStr}` : null;
@@ -220,10 +234,10 @@ class WhatsAppMultiManager {
 
                 const payload = {
                     id: msgIdStr,
-                    from: msg.from,
+                    from: fromJid,
                     to: msg.to,
                     fromMe: msg.fromMe,
-                    author: msg.author || msg.from,
+                    author: msg.author || fromJid,
                     body: msg.body || "",
                     hasMedia: hasMedia,
                     type: msg.type || "chat",
@@ -232,8 +246,8 @@ class WhatsAppMultiManager {
                     mimetype: mimetype,
                     timestamp: msg.timestamp,
                     _data: {
-                        notifyName: msg._data ? (msg._data.notifyName || msg._data.pushname) : "",
-                        pushName: msg._data ? (msg._data.notifyName || msg._data.pushname) : ""
+                        notifyName: notifyName,
+                        pushName: notifyName
                     }
                 };
 

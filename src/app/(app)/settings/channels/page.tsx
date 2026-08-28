@@ -123,6 +123,25 @@ export default function ChannelsSettingsPage() {
     }
   };
 
+  // Sincronizar chats
+  const [syncing, setSyncing] = useState<Record<string, boolean>>({});
+  const handleSyncChannel = async (id: string) => {
+    setSyncing((prev) => ({ ...prev, [id]: true }));
+    try {
+      const res = await fetch(`/api/channels/${id}/sync`, { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        alert(`¡Sincronización completada! Se procesaron ${data.chats || 0} chats.`);
+      } else {
+        alert(`Error al sincronizar: ${data.error?.message || data.error || "Fallo en el servicio"}`);
+      }
+    } catch {
+      alert("Error al comunicarse con el servidor");
+    } finally {
+      setSyncing((prev) => ({ ...prev, [id]: false }));
+    }
+  };
+
   // Eliminar canal
   const handleDeleteChannel = async (id: string) => {
     if (!confirm("¿Seguro que deseas desconectar y eliminar este canal?")) return;
@@ -303,6 +322,19 @@ export default function ChannelsSettingsPage() {
                     <span className="inline-flex items-center gap-1 text-xs font-medium text-rose-600 bg-rose-500/10 px-2 py-0.5 rounded-full">
                       <AlertCircle size={12} /> Desconectado
                     </span>
+                  )}
+
+                  {/* Sincronizar chats existentes */}
+                  {ch.provider === "whatsapp_web" && ch.status === "connected" && (
+                    <button
+                      onClick={() => handleSyncChannel(ch.id)}
+                      disabled={syncing[ch.id]}
+                      className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 bg-blue-500/10 px-2.5 py-1 rounded-md hover:bg-blue-500/20 transition disabled:opacity-50"
+                      title="Importar chats y mensajes existentes desde WhatsApp Web"
+                    >
+                      <RefreshCw size={12} className={syncing[ch.id] ? "animate-spin" : ""} />
+                      {syncing[ch.id] ? "Sincronizando..." : "Sincronizar Chats"}
+                    </button>
                   )}
 
                   {/* Eliminar */}
