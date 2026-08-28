@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useRef, useState } from "react";
 import {
@@ -412,9 +412,11 @@ export function Composer({
       </div>
       <div className="mt-1.5 flex items-center justify-between">
         {error ? <p className="text-xs text-destructive">{error}</p> : <span />}
-        <p className="text-[11px] text-text-3">
-          Ventana abierta · quedan {formatRemaining(conversation.windowRemainingMs)}
-        </p>
+        {conversation.windowRemainingMs > 0 && conversation.windowRemainingMs < 24 * 60 * 60 * 1000 && (
+          <p className="text-[11px] text-text-3">
+            Ventana abierta · quedan {formatRemaining(conversation.windowRemainingMs)}
+          </p>
+        )}
       </div>
     </div>
   );

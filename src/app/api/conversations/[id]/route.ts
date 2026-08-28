@@ -23,7 +23,18 @@ export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
 
   const row = await getConversation(session.organizationId, id);
   if (row) {
-    const dto = serializeConversation(row.conversation, row.contact);
+    const isUnrestricted =
+      (row.channelAccount && row.channelAccount.provider !== "whatsapp_cloud") ||
+      row.conversation.platform === "instagram" ||
+      row.conversation.platform === "mercadolibre" ||
+      row.conversation.platform === "facebook";
+    const dto = serializeConversation(
+      row.conversation,
+      row.contact,
+      null,
+      null,
+      Boolean(isUnrestricted)
+    );
     publish(session.organizationId, {
       type: "conversation.updated",
       data: { conversation: dto },

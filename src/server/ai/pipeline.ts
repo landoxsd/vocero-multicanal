@@ -1,4 +1,4 @@
-import { asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -121,8 +121,31 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
   const lastInbound = [...history].reverse().find((m) => m.direction === "in");
   if (!lastInbound) return;
 
-  // Ventana cerrada: el agente JAMÁS envía texto libre → handoff 'ventana'.
-  if (!conversation.isTest && !isWindowOpen(conversation.lastInboundAt)) {
+  // Ventana cerrada: en WhatsApp Cloud API el agente no envía texto libre → handoff 'ventana'.
+  // En WhatsApp Web (QR) u omnicanal no existe la restricción de 24h.
+  let isUnrestricted =
+    conversation.platform === "instagram" ||
+    conversation.platform === "mercadolibre" ||
+    conversation.platform === "facebook";
+
+  if (!isUnrestricted) {
+    const [connectedChannel] = await db
+      .select({ provider: schema.channelAccount.provider })
+      .from(schema.channelAccount)
+      .where(
+        and(
+          eq(schema.channelAccount.organizationId, organizationId),
+          eq(schema.channelAccount.status, "connected")
+        )
+      )
+      .limit(1);
+
+    if (connectedChannel && connectedChannel.provider !== "whatsapp_cloud") {
+      isUnrestricted = true;
+    }
+  }
+
+  if (!conversation.isTest && !isUnrestricted && !isWindowOpen(conversation.lastInboundAt)) {
     await applyHandoff(conversationId, organizationId, "ventana");
     return;
   }

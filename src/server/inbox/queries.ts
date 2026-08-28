@@ -24,17 +24,43 @@ export async function listConversations(
     limit 1
   )`;
 
+  const connectedAccounts = await db
+    .select({
+      id: schema.channelAccount.id,
+      provider: schema.channelAccount.provider,
+    })
+    .from(schema.channelAccount)
+    .where(
+      and(
+        eq(schema.channelAccount.organizationId, organizationId),
+        eq(schema.channelAccount.status, "connected")
+      )
+    );
+
+  const hasConnectedWeb = connectedAccounts.some(
+    (a) =>
+      a.provider === "whatsapp_web" ||
+      a.provider === "instagram" ||
+      a.provider === "mercadolibre" ||
+      a.provider === "facebook_messenger"
+  );
+
   const rows = await db
     .select({
       conversation: schema.conversation,
       contact: schema.contact,
       preview: previewSql,
       stageName: stageSql,
+      channelAccount: schema.channelAccount,
     })
     .from(schema.conversation)
     .innerJoin(
       schema.contact,
       eq(schema.conversation.contactId, schema.contact.id)
+    )
+    .leftJoin(
+      schema.channelAccount,
+      eq(schema.conversation.channelAccountId, schema.channelAccount.id)
     )
     .where(
       scoped(
@@ -46,9 +72,22 @@ export async function listConversations(
     )
     .orderBy(desc(sql`coalesce(${schema.conversation.lastMessageAt}, ${schema.conversation.createdAt})`));
 
-  return rows.map((r) =>
-    serializeConversation(r.conversation, r.contact, r.preview, r.stageName)
-  );
+  return rows.map((r) => {
+    const isUnrestricted =
+      hasConnectedWeb ||
+      (r.channelAccount && r.channelAccount.provider !== "whatsapp_cloud") ||
+      r.conversation.platform === "instagram" ||
+      r.conversation.platform === "mercadolibre" ||
+      r.conversation.platform === "facebook";
+
+    return serializeConversation(
+      r.conversation,
+      r.contact,
+      r.preview,
+      r.stageName,
+      Boolean(isUnrestricted)
+    );
+  });
 }
 
 export async function getConversation(
@@ -57,11 +96,19 @@ export async function getConversation(
 ) {
   const db = getDb();
   const rows = await db
-    .select({ conversation: schema.conversation, contact: schema.contact })
+    .select({
+      conversation: schema.conversation,
+      contact: schema.contact,
+      channelAccount: schema.channelAccount,
+    })
     .from(schema.conversation)
     .innerJoin(
       schema.contact,
       eq(schema.conversation.contactId, schema.contact.id)
+    )
+    .leftJoin(
+      schema.channelAccount,
+      eq(schema.conversation.channelAccountId, schema.channelAccount.id)
     )
     .where(
       scoped(
@@ -102,8 +149,18 @@ export function serializeConversation(
   c: typeof schema.conversation.$inferSelect,
   contact: typeof schema.contact.$inferSelect,
   preview: string | null = null,
-  stageName: string | null = null
+  stageName: string | null = null,
+  isUnrestricted: boolean = false
 ): ConversationDto {
+  const isWebOrOmni =
+    isUnrestricted ||
+    c.platform === "instagram" ||
+    c.platform === "mercadolibre" ||
+    c.platform === "facebook";
+
+  const windowOpen = isWebOrOmni ? true : isWindowOpen(c.lastInboundAt);
+  const windowRemaining = isWebOrOmni ? 24 * 60 * 60 * 1000 : windowRemainingMs(c.lastInboundAt);
+
   return {
     id: c.id,
     contact: { id: contact.id, name: contact.name, phone: contact.phone },
@@ -115,8 +172,8 @@ export function serializeConversation(
     lastInboundAt: c.lastInboundAt?.toISOString() ?? null,
     lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
     unreadCount: c.unreadCount,
-    windowOpen: isWindowOpen(c.lastInboundAt),
-    windowRemainingMs: windowRemainingMs(c.lastInboundAt),
+    windowOpen,
+    windowRemainingMs: windowRemaining,
     preview,
   };
 }
