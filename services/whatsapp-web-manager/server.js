@@ -12,7 +12,7 @@ app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 const PORT = process.env.PORT || 3005;
 const SESSIONS_DIR = process.env.SESSIONS_DIR || "./sessions";
-const DEFAULT_WEBHOOK = process.env.DEFAULT_WEBHOOK_URL || "http://localhost:3000/api/v1/webhooks/waha";
+const DEFAULT_WEBHOOK = process.env.DEFAULT_WEBHOOK_URL || "http://localhost:3000/api/webhooks/whatsapp-web";
 const HEADLESS_MODE = process.env.HEADLESS !== "false";
 
 // Instanciar Gestor Omnicanal

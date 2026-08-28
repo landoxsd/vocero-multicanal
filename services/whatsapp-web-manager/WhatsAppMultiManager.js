@@ -41,7 +41,7 @@ class WhatsAppMultiManager {
     constructor(options = {}) {
         this.sessionsPath = path.resolve(options.sessionsPath || "./sessions");
         this.headless = options.headless !== undefined ? options.headless : false;
-        this.webhookUrl = options.webhookUrl || "http://localhost:3000/api/v1/webhooks/waha";
+        this.webhookUrl = options.webhookUrl || "http://localhost:3000/api/webhooks/whatsapp-web";
         this.remoteWaWebVersion = options.remoteWaWebVersion || 
             "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1014583151-alpha.html";
 
