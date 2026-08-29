@@ -26,6 +26,8 @@ const envSchema = z.object({
   OPENROUTER_BASE_URL: z.string().url().default("https://openrouter.ai/api"),
   OPENROUTER_MODEL: z.string().optional(),
   OPENROUTER_JUDGE_MODEL: z.string().optional(),
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().default("gemini-1.5-flash"),
   ALLOW_SIGNUP: z.string().optional(),
   AGENT_COALESCE_MS: z.coerce.number().int().min(0).default(6000),
   WA_MOCK_ENABLED: z.string().optional(),
@@ -87,8 +89,12 @@ export function isMockEnabled(): boolean {
   );
 }
 
-/** true si hay proveedor de IA configurado (token presente y no vacío). */
+/** true si hay proveedor de IA configurado (OpenRouter o Gemini presente y no vacío). */
 export function isAiConfigured(): boolean {
   const token = process.env.OPENROUTER_API_TOKEN;
-  return typeof token === "string" && token.trim().length > 0;
+  const gemini = process.env.GEMINI_API_KEY;
+  return (
+    (typeof token === "string" && token.trim().length > 0) ||
+    (typeof gemini === "string" && gemini.trim().length > 0)
+  );
 }

@@ -29,20 +29,23 @@ export async function chatJson<T>(
     return {
       ok: false,
       error: "not_configured",
-      detail: "Sin OPENROUTER_API_TOKEN configurado",
+      detail: "Sin proveedor de IA configurado (GEMINI_API_KEY u OPENROUTER_API_TOKEN)",
     };
   }
   const env = getEnv();
+  const defaultModel = env.GEMINI_API_KEY
+    ? env.GEMINI_MODEL
+    : env.OPENROUTER_MODEL || "google/gemini-flash-1.5";
   const model =
     opts?.model ??
     (opts?.judge
-      ? (env.OPENROUTER_JUDGE_MODEL ?? env.OPENROUTER_MODEL)
-      : env.OPENROUTER_MODEL);
+      ? (env.OPENROUTER_JUDGE_MODEL ?? env.OPENROUTER_MODEL ?? defaultModel)
+      : defaultModel);
   if (!model?.trim()) {
     return {
       ok: false,
       error: "not_configured",
-      detail: "Sin OPENROUTER_MODEL configurado",
+      detail: "Sin modelo de IA configurado",
     };
   }
 
@@ -99,12 +102,18 @@ async function callProvider(
   const env = getEnv();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  const useGemini = Boolean(env.GEMINI_API_KEY && !env.OPENROUTER_API_TOKEN);
+  const endpoint = useGemini
+    ? "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    : `${env.OPENROUTER_BASE_URL}/v1/chat/completions`;
+  const token = useGemini ? env.GEMINI_API_KEY : env.OPENROUTER_API_TOKEN;
+
   try {
-    const res = await fetch(`${env.OPENROUTER_BASE_URL}/v1/chat/completions`, {
+    const res = await fetch(endpoint, {
       method: "POST",
       headers: {
-        // El token jamás se loguea; solo viaja en este header.
-        Authorization: `Bearer ${env.OPENROUTER_API_TOKEN}`,
+        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ model, messages }),
