@@ -14,6 +14,7 @@ import { ContactAvatar } from "@/components/avatar";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { FichaPanel } from "@/components/ficha-panel";
+import { FichaTips } from "@/components/inbox/ficha-tips";
 
 const HANDOFF_LABELS: Record<string, string> = {
   cliente: "El cliente pidió un humano",
@@ -311,6 +312,12 @@ export function ContactPanel({
             </ol>
           </section>
         )}
+
+        {/* Tips: copiloto para el operador, se actualiza con el hilo. */}
+        <FichaTips
+          conversationId={conversation.id}
+          refreshKey={refreshKey}
+        />
 
         {/* Ficha: lo que se SABE del lead. Va antes de Notas —lo que alguien
             OPINA— porque es lo que se consulta a mitad de una conversación. */}

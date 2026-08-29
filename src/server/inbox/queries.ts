@@ -2,6 +2,7 @@ import { and, desc, eq, gt, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import { isWindowOpen, windowRemainingMs } from "@/server/inbox/window";
+import { computeWaitingState } from "@/server/inbox/waiting";
 
 import type { ConversationDto } from "@/lib/types";
 
@@ -21,6 +22,13 @@ export async function listConversations(
     select s.name from lead l
     join pipeline_stage s on s.id = l.stage_id
     where l.contact_id = ${schema.contact.id}
+    limit 1
+  )`;
+  const lastDirSql = sql<"in" | "out" | null>`(
+    select m.direction
+    from message m
+    where m.conversation_id = ${schema.conversation.id}
+    order by m.created_at desc
     limit 1
   )`;
 
@@ -51,6 +59,7 @@ export async function listConversations(
       contact: schema.contact,
       preview: previewSql,
       stageName: stageSql,
+      lastMessageDirection: lastDirSql,
       channelAccount: schema.channelAccount,
     })
     .from(schema.conversation)
@@ -85,7 +94,8 @@ export async function listConversations(
       r.contact,
       r.preview,
       r.stageName,
-      Boolean(isUnrestricted)
+      Boolean(isUnrestricted),
+      r.lastMessageDirection
     );
   });
 }
@@ -150,7 +160,8 @@ export function serializeConversation(
   contact: typeof schema.contact.$inferSelect,
   preview: string | null = null,
   stageName: string | null = null,
-  isUnrestricted: boolean = false
+  isUnrestricted: boolean = false,
+  lastMessageDirection: "in" | "out" | null = null
 ): ConversationDto {
   const isWebOrOmni =
     isUnrestricted ||
@@ -160,6 +171,10 @@ export function serializeConversation(
 
   const windowOpen = isWebOrOmni ? true : isWindowOpen(c.lastInboundAt);
   const windowRemaining = isWebOrOmni ? 24 * 60 * 60 * 1000 : windowRemainingMs(c.lastInboundAt);
+  const { needsReply, waitingMs } = computeWaitingState({
+    lastMessageDirection,
+    lastInboundAt: c.lastInboundAt,
+  });
 
   return {
     id: c.id,
@@ -171,6 +186,8 @@ export function serializeConversation(
     handoffReason: c.handoffReason,
     lastInboundAt: c.lastInboundAt?.toISOString() ?? null,
     lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
+    needsReply,
+    waitingMs,
     unreadCount: c.unreadCount,
     windowOpen,
     windowRemainingMs: windowRemaining,

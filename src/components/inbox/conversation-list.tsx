@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { ContactAvatar } from "@/components/avatar";
 import { Button } from "@/components/ui/button";
 import { ChannelBadge } from "@/components/channels/channel-badge";
-import { formatTime, previewText } from "./helpers";
+import { formatTime, liveWaitingMs, previewText, sortInboxConversations, formatWaiting, waitingUrgency } from "./helpers";
 
 const STAGE_DOT: Record<string, string> = {
   Nuevo: "#9ca3af",
@@ -54,21 +54,37 @@ function EmptyState({ onSeeded }: { onSeeded: () => void }) {
   );
 }
 
+const URGENCY_CLASS: Record<ReturnType<typeof waitingUrgency>, string> = {
+  normal: "border-border bg-secondary text-text-2",
+  warning: "border-warning-soft bg-warning-tint text-warning-text",
+  critical: "border-danger-soft bg-danger-tint text-danger-text",
+};
+
 export function ConversationList({
   conversations: conversationsProp,
   selectedId,
   onSelect,
   onSeeded,
+  markReadOnOpen,
+  onMarkReadOnOpenChange,
 }: {
   conversations: ConversationDto[] | null;
   selectedId: string | null;
   onSelect: (id: string) => void;
   onSeeded: () => void;
+  markReadOnOpen: boolean;
+  onMarkReadOnOpenChange: (value: boolean) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"all" | "unread">("all");
+  const [filter, setFilter] = useState<"all" | "unread" | "waiting">("all");
   const [stage, setStage] = useState<string>("all");
+  const [now, setNow] = useState(() => Date.now());
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   /**
    * Rescate de lo tecleado ANTES de que hidratara el JS. La caja se pinta en
@@ -96,8 +112,14 @@ export function ConversationList({
       }) && (stage === "all" || c.stageName === stage)
   );
   const unreadCount = searched.filter((c) => c.unreadCount > 0).length;
-  const visible =
-    filter === "unread" ? searched.filter((c) => c.unreadCount > 0) : searched;
+  const waitingCount = searched.filter((c) => c.needsReply).length;
+  const filtered =
+    filter === "unread"
+      ? searched.filter((c) => c.unreadCount > 0)
+      : filter === "waiting"
+        ? searched.filter((c) => c.needsReply)
+        : searched;
+  const visible = sortInboxConversations(filtered);
 
   // Etapas presentes en la bandeja, en el orden en que llegan del pipeline.
   const stages: string[] = [];
@@ -138,13 +160,23 @@ export function ConversationList({
             </button>
           )}
         </div>
+        <label className="mt-2 flex cursor-pointer items-center gap-2 text-[12px] text-text-2">
+          <input
+            type="checkbox"
+            checked={markReadOnOpen}
+            onChange={(e) => onMarkReadOnOpenChange(e.target.checked)}
+            className="rounded border"
+          />
+          Marcar como leída al abrir
+        </label>
       </header>
 
-      <div className="flex items-center gap-1.5 border-b px-4 py-2.5">
+      <div className="flex items-center gap-1.5 overflow-x-auto border-b px-4 py-2.5">
         {(
           [
             { id: "all", label: "Todas", count: searched.length },
             { id: "unread", label: "No leídas", count: unreadCount },
+            { id: "waiting", label: "Esperando", count: waitingCount },
           ] as const
         ).map((f) => (
           <button
@@ -205,6 +237,9 @@ export function ConversationList({
             {visible.map((c) => {
               const unread = c.unreadCount > 0;
               const active = selectedId === c.id;
+              const waitMs = liveWaitingMs(c, now);
+              const urgency =
+                waitMs !== null ? waitingUrgency(waitMs) : "normal";
               return (
                 <li key={c.id} className="relative border-b border-border/70">
                   {active && (
@@ -276,6 +311,17 @@ export function ConversationList({
                           <span className="inline-flex items-center gap-1 rounded-full border border-warning-soft bg-warning-tint px-2 py-0.5 text-[11px] text-warning-text">
                             <UserRound className="h-3 w-3" strokeWidth={1.7} />
                             Atención humana
+                          </span>
+                        )}
+                        {waitMs !== null && (
+                          <span
+                            className={cn(
+                              "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                              URGENCY_CLASS[urgency]
+                            )}
+                            title="Tiempo esperando respuesta"
+                          >
+                            ⏱ {formatWaiting(waitMs)}
                           </span>
                         )}
                       </span>

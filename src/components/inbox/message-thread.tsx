@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import {
   AlertTriangle,
+  BookMarked,
   Check,
   CheckCheck,
   Clock3,
@@ -182,7 +183,13 @@ function bubbleTime(iso: string): string {
   });
 }
 
-export function MessageThread({ messages }: { messages: MessageDto[] }) {
+export function MessageThread({
+  messages,
+  onSaveToKb,
+}: {
+  messages: MessageDto[];
+  onSaveToKb?: (messageId: string) => void;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -216,7 +223,7 @@ export function MessageThread({ messages }: { messages: MessageDto[] }) {
             )}
             <div
               className={cn(
-                "flex",
+                "group flex",
                 out ? "justify-end" : "justify-start",
                 grouped ? "mt-[3px]" : "mt-2.5"
               )}
@@ -225,13 +232,30 @@ export function MessageThread({ messages }: { messages: MessageDto[] }) {
                 className={cn(
                   // En el teléfono la burbuja necesita casi todo el renglón:
                   // con 64% cada mensaje se parte en tres líneas.
-                  "max-w-[85%] rounded-lg px-3 pb-1.5 pt-2 text-sm leading-[1.45] shadow-sm sm:max-w-[64%]",
+                  "relative max-w-[85%] rounded-lg px-3 pb-1.5 pt-2 text-sm leading-[1.45] shadow-sm sm:max-w-[64%]",
                   out
                     ? "border border-brand-soft bg-bubble-out text-bubble-out-text"
                     : "bg-background",
                   !grouped && (out ? "rounded-tr-[5px]" : "rounded-tl-[5px]")
                 )}
               >
+                {onSaveToKb &&
+                  (m.type === "text" || m.type === "template") &&
+                  m.text?.trim() && (
+                    <button
+                      type="button"
+                      onClick={() => onSaveToKb(m.id)}
+                      title="Guardar pregunta/respuesta en conocimiento"
+                      className={cn(
+                        "absolute -top-2 opacity-0 transition-opacity group-hover:opacity-100",
+                        out ? "-left-2" : "-right-2"
+                      )}
+                    >
+                      <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border bg-background text-text-2 shadow-sm hover:text-brand">
+                        <BookMarked className="h-3.5 w-3.5" strokeWidth={1.7} />
+                      </span>
+                    </button>
+                  )}
                 {m.media ? (
                   <span className="block">
                     <MediaBlock media={m.media} />

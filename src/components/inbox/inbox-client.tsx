@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { ChevronLeft, PanelRight } from "lucide-react";
+import { ChevronLeft, PanelRight, BookMarked } from "lucide-react";
 import { cn, formatPhone } from "@/lib/utils";
 import { ContactAvatar } from "@/components/avatar";
 import type { ConversationDto, MessageDto } from "@/lib/types";
@@ -11,6 +11,9 @@ import { ConversationList } from "./conversation-list";
 import { MessageThread } from "./message-thread";
 import { Composer } from "./composer";
 import { ContactPanel } from "./contact-panel";
+import { SaveKbDialog } from "./save-kb-dialog";
+
+const MARK_READ_KEY = "vocero.markReadOnOpen";
 
 /**
  * Texto que ya salió del compositor pero cuyo POST todavía viaja. Existe solo
@@ -47,6 +50,17 @@ export function InboxClient() {
   // Se incrementa con cada evento SSE que puede cambiar la etapa/lead o el
   // estado del agente: el panel de detalles lo observa y refetch en vivo.
   const [detailRev, setDetailRev] = useState(0);
+  const [markReadOnOpen, setMarkReadOnOpen] = useState(true);
+  const [kbDialog, setKbDialog] = useState<{ messageId?: string } | null>(null);
+
+  useEffect(() => {
+    const stored = localStorage.getItem(MARK_READ_KEY);
+    if (stored !== null) setMarkReadOnOpen(stored !== "false");
+  }, []);
+  const updateMarkReadOnOpen = useCallback((value: boolean) => {
+    setMarkReadOnOpen(value);
+    localStorage.setItem(MARK_READ_KEY, String(value));
+  }, []);
 
   useEffect(() => {
     if (!isWideEnoughForPanel()) return;
@@ -98,18 +112,26 @@ export function InboxClient() {
     return () => clearInterval(interval);
   }, [refetchConversations, refetchMessages]);
 
-  const select = useCallback(
-    (id: string) => {
-      setSelectedId(id);
-      setMessages([]);
-      void refetchMessages(id);
-      void fetch(`/api/conversations/${id}`, {
+  const markRead = useCallback(
+    (conversationId: string) => {
+      if (!markReadOnOpen) return;
+      void fetch(`/api/conversations/${conversationId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ markRead: true }),
       });
     },
-    [refetchMessages]
+    [markReadOnOpen]
+  );
+
+  const select = useCallback(
+    (id: string) => {
+      setSelectedId(id);
+      setMessages([]);
+      void refetchMessages(id);
+      markRead(id);
+    },
+    [refetchMessages, markRead]
   );
 
   // Enlace directo desde Contactos/Pipeline: /inbox?contact=<id>
@@ -128,11 +150,7 @@ export function InboxClient() {
         setMessages((prev) =>
           prev.some((x) => x.id === m.id) ? prev : [...prev, m]
         );
-        void fetch(`/api/conversations/${conversationId}`, {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ markRead: true }),
-        });
+        void markRead(conversationId);
       }
       void refetchConversations();
       // Un entrante nuevo puede crear/mover el lead: refresca el panel.
@@ -290,6 +308,8 @@ export function InboxClient() {
           selectedId={selectedId}
           onSelect={select}
           onSeeded={() => void refetchConversations()}
+          markReadOnOpen={markReadOnOpen}
+          onMarkReadOnOpenChange={updateMarkReadOnOpen}
         />
       </section>
 
@@ -342,8 +362,19 @@ export function InboxClient() {
                   <PanelRight className="h-4 w-4" strokeWidth={1.7} />
                 </button>
               )}
+              <button
+                onClick={() => setKbDialog({})}
+                aria-label="Guardar en conocimiento"
+                title="Guardar pregunta y respuesta en el conocimiento del agente"
+                className="shrink-0 rounded-sm border p-1.5 text-text-3 hover:bg-accent hover:text-foreground"
+              >
+                <BookMarked className="h-4 w-4" strokeWidth={1.7} />
+              </button>
             </header>
-            <MessageThread messages={thread} />
+            <MessageThread
+              messages={thread}
+              onSaveToKb={(messageId) => setKbDialog({ messageId })}
+            />
             <Composer
               conversation={selected}
               onSend={sendText}
@@ -393,6 +424,14 @@ export function InboxClient() {
           </div>
         )}
       </section>
+
+      {kbDialog && selectedId && (
+        <SaveKbDialog
+          conversationId={selectedId}
+          messageId={kbDialog.messageId}
+          onClose={() => setKbDialog(null)}
+        />
+      )}
     </div>
   );
 }

@@ -1,7 +1,9 @@
 const express = require("express");
+const http = require("http");
 const path = require("path");
 const fs = require("fs");
 const qrcode = require("qrcode");
+const { WebSocketServer } = require("ws");
 require("dotenv").config();
 
 const OmniChannelManager = require("./OmniChannelManager");
@@ -15,12 +17,38 @@ const SESSIONS_DIR = process.env.SESSIONS_DIR || "./sessions";
 const DEFAULT_WEBHOOK = process.env.DEFAULT_WEBHOOK_URL || "http://localhost:3000/api/webhooks/whatsapp-web";
 const HEADLESS_MODE = process.env.HEADLESS !== "false";
 
+const wsClients = new Set();
+
+function isWsAuthorized(req, secretParam) {
+    const requiredSecret = process.env.WA_WEB_WEBHOOK_SECRET;
+    const requiredApiKey = process.env.API_KEY;
+
+    if (requiredSecret && requiredSecret.length >= 16) {
+        if (secretParam === requiredSecret) return true;
+    }
+    if (requiredApiKey) {
+        const apiKey = req.headers["x-api-key"];
+        if (apiKey === requiredApiKey) return true;
+    }
+    // Dev sin secretos: permitir (migración local)
+    if (!requiredSecret && !requiredApiKey) return true;
+    return false;
+}
+
+function broadcastWaEvent(body) {
+    const msg = JSON.stringify(body);
+    for (const ws of wsClients) {
+        if (ws.readyState === 1) ws.send(msg);
+    }
+}
+
 // Instanciar Gestor Omnicanal
 const omni = new OmniChannelManager({
     sessionsDir: SESSIONS_DIR,
     headless: HEADLESS_MODE,
     webhookUrl: DEFAULT_WEBHOOK,
-    webhookSecret: process.env.WA_WEB_WEBHOOK_SECRET || null
+    webhookSecret: process.env.WA_WEB_WEBHOOK_SECRET || null,
+    eventSink: broadcastWaEvent
 });
 
 // Middleware de API KEY (permite dashboard web local)
@@ -649,7 +677,23 @@ app.post("/api/webhooks/instagram", async (req, res) => {
     await omni.instagram.handleWebhookNotification(req.body);
 });
 
-app.listen(PORT, () => {
+const server = http.createServer(app);
+
+const wss = new WebSocketServer({ server, path: "/ws/events" });
+wss.on("connection", (ws, req) => {
+    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    const secret = url.searchParams.get("secret");
+    if (!isWsAuthorized(req, secret)) {
+        ws.close(4401, "Unauthorized");
+        return;
+    }
+    wsClients.add(ws);
+    ws.on("close", () => wsClients.delete(ws));
+    ws.send(JSON.stringify({ event: "socket.connected", session: "", payload: { ok: true } }));
+});
+
+server.listen(PORT, () => {
     console.log(`🚀 Servidor WhatsApp & Omnicanal corriendo en: http://localhost:${PORT}`);
+    console.log(`   WebSocket de eventos: ws://localhost:${PORT}/ws/events`);
     console.log(`   Soporte completo de Dashboard Web y CRM BR activado!`);
 });

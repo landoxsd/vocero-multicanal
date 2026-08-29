@@ -52,6 +52,7 @@ class WhatsAppMultiManager {
         this.headless = options.headless !== undefined ? options.headless : false;
         this.webhookUrl = options.webhookUrl || "http://localhost:3000/api/webhooks/whatsapp-web";
         this.webhookSecret = options.webhookSecret || process.env.WA_WEB_WEBHOOK_SECRET || null;
+        this.eventSink = options.eventSink || null;
         this.remoteWaWebVersion = options.remoteWaWebVersion || 
             "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1014583151-alpha.html";
 
@@ -377,6 +378,14 @@ class WhatsAppMultiManager {
             });
         } catch (e) {
             console.log(`⚠️ [${sessionObj.sessionId}] No se pudo enviar Webhook (${event}) a ${targetUrl}: ${e.message}`);
+        }
+
+        if (this.eventSink) {
+            try {
+                this.eventSink({ event, session: sessionObj.sessionId, payload });
+            } catch (e) {
+                console.log(`⚠️ [${sessionObj.sessionId}] eventSink falló (${event}): ${e.message}`);
+            }
         }
     }
 

@@ -157,7 +157,9 @@ Para operar y extender esta base de código, el equipo debe dominar:
 - [x] Normalización de identidades y teléfonos para emparejar chats existentes y nuevos.
 - [x] Auto-refresco periódico en `/inbox` (catch-up de respaldo cada 12s; SSE primario).
 - [x] **Reconexión automática silenciosa:** backoff exponencial con `LocalAuth` (hasta `WA_RECONNECT_MAX_ATTEMPTS`).
-- [ ] **Socket / Long-Polling bidireccional:** canal persistente manager → CRM sin depender solo del webhook HTTP.
+- [x] **Socket manager → CRM:** WebSocket `/ws/events` en el manager; cliente
+  in-process en el arranque de Next (`ws-client.ts`) con reconexión automática.
+  El webhook HTTP sigue como respaldo (idempotencia por `externalMessageId`).
 
 ### Fase 2: Activación de Canales Restantes
 - [ ] **Instagram Direct:** Habilitar el módulo `InstagramManager.js` para recibir DMs y respuestas a historias.

@@ -21,12 +21,10 @@ organization · **Zod** en todo input externo · nanoid con prefijos (`ct_`,
 conducidos con Playwright · Docker multi-stage (standalone, healthcheck
 `/api/health`) · deploy en Coolify (Ruta A) o docker compose + Caddy (Ruta B).
 
-Tiempo real hacia el **navegador** por **SSE** (`/api/events`): heartbeat
-`: ping` ~25s, headers anti-buffering, catch-up por refetch con `since=`. El
-trabajo en segundo plano (agente, Laboratorio) es in-process, sin colas
-externas. Entre el CRM y el manager de WhatsApp Web, en red privada, se
-permite polling o transporte interno (el compose aún no orquesta el manager:
-trátalo como deuda operativa, no como señal de que el canal no existe).
+Tiempo real hacia el **navegador** por **SSE** (`/api/events`). Entre el CRM y
+el manager, en red privada, hay **WebSocket** (`/ws/events`) además del webhook
+HTTP de respaldo (el compose aún no orquesta el manager en dev local sin compose:
+trátalo como deuda operativa solo fuera de Ruta B).
 
 ## Mapa del código (fronteras de modificación)
 

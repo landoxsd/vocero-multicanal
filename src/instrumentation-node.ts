@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
+import { startWaWebManagerSocket } from "@/server/channels/whatsapp-web/ws-client";
 
 /**
  * Limpieza al arranque (FR-034): corridas del Laboratorio que quedaron
@@ -25,5 +26,14 @@ export async function cleanupOrphanRuns(): Promise<void> {
   } catch (err) {
     // La BD puede no estar lista aún (migraciones corren antes del server).
     console.error("[boot] limpieza de corridas huérfanas falló:", err);
+  }
+}
+
+/** Cliente WebSocket al manager (push de eventos en red privada). */
+export function startWaWebSocket(): void {
+  try {
+    startWaWebManagerSocket();
+  } catch (err) {
+    console.error("[boot] cliente WS de WhatsApp Web no arrancó:", err);
   }
 }

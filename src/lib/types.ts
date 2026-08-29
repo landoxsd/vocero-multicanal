@@ -11,10 +11,20 @@ export type ConversationDto = {
   handoffReason: string | null;
   lastInboundAt: string | null;
   lastMessageAt: string | null;
+  /** Último mensaje del hilo fue del cliente y aún no hay respuesta. */
+  needsReply: boolean;
+  /** ms desde lastInboundAt cuando needsReply; null si no aplica. */
+  waitingMs: number | null;
   unreadCount: number;
   windowOpen: boolean;
   windowRemainingMs: number;
   preview: string | null;
+};
+
+/** Tip contextual para el operador en el panel de la bandeja. */
+export type ContactTip = {
+  text: string;
+  kind: "accion" | "dato" | "alerta";
 };
 
 /** 008 — Adjunto de un mensaje, para previsualización en el hilo. */
