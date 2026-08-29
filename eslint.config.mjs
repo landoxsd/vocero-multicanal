@@ -10,6 +10,7 @@ const config = [
       "dist/**",
       "drizzle/**",
       "scripts/**",
+      "services/whatsapp-web-manager/**",
       "next-env.d.ts",
       ".tmp-seed-demo.mjs",
     ],
