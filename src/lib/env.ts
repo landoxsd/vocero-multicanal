@@ -27,7 +27,7 @@ const envSchema = z.object({
   OPENROUTER_MODEL: z.string().optional(),
   OPENROUTER_JUDGE_MODEL: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
-  GEMINI_MODEL: z.string().default("gemini-1.5-flash"),
+  GEMINI_MODEL: z.string().default("gemini-3.6-flash"),
   ALLOW_SIGNUP: z.string().optional(),
   AGENT_COALESCE_MS: z.coerce.number().int().min(0).default(6000),
   WA_MOCK_ENABLED: z.string().optional(),
