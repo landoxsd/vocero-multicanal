@@ -88,7 +88,14 @@ export function InboxClient() {
 
   useEffect(() => {
     void refetchConversations();
-  }, [refetchConversations]);
+    const interval = setInterval(() => {
+      void refetchConversations();
+      if (selectedIdRef.current) {
+        void refetchMessages(selectedIdRef.current);
+      }
+    }, 3500);
+    return () => clearInterval(interval);
+  }, [refetchConversations, refetchMessages]);
 
   const select = useCallback(
     (id: string) => {

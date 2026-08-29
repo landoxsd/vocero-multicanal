@@ -139,15 +139,66 @@ export class WhatsAppWebAdapter implements ChannelProviderAdapter {
   ): Promise<{ success: boolean; chats?: number; sent?: number }> {
     const sessionId = account.accountIdentifier || account.id;
     try {
-      const res = await fetch(`${this.managerUrl}/api/sessions/${sessionId}/sync-chats`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ limit: 50, msgs: 10 }),
-      });
+      // 1. Obtener los chats y mensajes directamente desde el gestor de WhatsApp
+      const res = await fetch(`${this.managerUrl}/api/sessions/${sessionId}/chats?limit=50&msgs=20`);
       if (!res.ok) return { success: false };
-      const data = await res.json();
-      return { success: true, chats: data.chats, sent: data.sent };
-    } catch {
+      const data = (await res.json()) as {
+        success?: boolean;
+        chats?: Array<{
+          chatId: string;
+          name: string;
+          messages: Array<{
+            id: string | { _serialized?: string };
+            from: string | { _serialized?: string };
+            to: string | { _serialized?: string };
+            fromMe: boolean;
+            body: string;
+            type?: string;
+            timestamp?: number;
+            _data?: { notifyName?: string; pushName?: string };
+          }>;
+        }>;
+      };
+
+      const rawChats = data.chats || [];
+      const { omniChannelManager } = await import("../omnichannel-manager");
+
+      let processedCount = 0;
+      for (const chat of rawChats) {
+        const rawChatId = typeof chat.chatId === "string" ? chat.chatId : "";
+        if (!rawChatId || rawChatId.includes("status@broadcast") || rawChatId.includes("@g.us")) continue;
+        const cleanPhone = rawChatId.replace(/@.*$/, "");
+
+        for (const msg of chat.messages || []) {
+          const fromMe = Boolean(msg.fromMe);
+          const fromJid = typeof msg.from === "string" ? msg.from : msg.from?._serialized || rawChatId;
+          const toJid = typeof msg.to === "string" ? msg.to : msg.to?._serialized || rawChatId;
+          const targetJid = fromMe ? (toJid === "me" ? rawChatId : toJid) : (fromJid === "me" ? rawChatId : fromJid);
+          const msgIdStr = typeof msg.id === "string" ? msg.id : msg.id?._serialized || `waw_${Date.now()}_${Math.random()}`;
+          const senderName = fromMe
+            ? (chat.name || cleanPhone)
+            : (msg._data?.notifyName || msg._data?.pushName || chat.name || cleanPhone);
+
+          await omniChannelManager.processInboundMessage({
+            channelAccountId: account.id,
+            provider: "whatsapp_web",
+            platform: "whatsapp",
+            senderId: targetJid,
+            senderName,
+            senderPhone: cleanPhone,
+            direction: fromMe ? "out" : "in",
+            text: msg.body || "",
+            externalMessageId: msgIdStr,
+            mediaType: (msg.type as any) || "text",
+            timestamp: msg.timestamp ? new Date(msg.timestamp * 1000) : new Date(),
+          });
+          processedCount++;
+        }
+      }
+
+      return { success: true, chats: rawChats.length, sent: processedCount };
+    } catch (e) {
+      console.error("[WhatsAppWebAdapter] Error sincronizando chats:", e);
       return { success: false };
     }
   }
