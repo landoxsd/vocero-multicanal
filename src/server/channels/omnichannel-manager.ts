@@ -1,6 +1,7 @@
-import { and, eq, or, sql } from "drizzle-orm";
+import { eq, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
+import { scoped } from "@/lib/db/tenant";
 import { publish } from "@/server/events/bus";
 import { onLeadActivity } from "@/server/inbox/lead-activity";
 import { maybeRunAgentTurn } from "@/server/ai/trigger";
@@ -65,8 +66,9 @@ export class OmniChannelManager {
       .select()
       .from(schema.contact)
       .where(
-        and(
-          eq(schema.contact.organizationId, orgId),
+        scoped(
+          schema.contact.organizationId,
+          orgId,
           or(
             eq(schema.contact.waIdentity, identityKey),
             eq(schema.contact.waIdentity, payload.senderId),
@@ -100,7 +102,7 @@ export class OmniChannelManager {
       const [firstStage] = await db
         .select()
         .from(schema.pipelineStage)
-        .where(eq(schema.pipelineStage.organizationId, orgId))
+        .where(scoped(schema.pipelineStage.organizationId, orgId))
         .orderBy(schema.pipelineStage.position)
         .limit(1);
 
@@ -125,8 +127,9 @@ export class OmniChannelManager {
       .select()
       .from(schema.conversation)
       .where(
-        and(
-          eq(schema.conversation.organizationId, orgId),
+        scoped(
+          schema.conversation.organizationId,
+          orgId,
           eq(schema.conversation.contactId, contactId),
           eq(schema.conversation.isTest, false)
         )
@@ -162,7 +165,13 @@ export class OmniChannelManager {
           lastMessageAt: msgTimestamp,
           updatedAt: new Date(),
         })
-        .where(eq(schema.conversation.id, convId));
+        .where(
+          scoped(
+            schema.conversation.organizationId,
+            orgId,
+            eq(schema.conversation.id, convId)
+          )
+        );
     }
 
     // 4. Guardar el mensaje — idempotente por externalMessageId para evitar duplicados en polling
@@ -172,8 +181,9 @@ export class OmniChannelManager {
         .select({ id: schema.message.id })
         .from(schema.message)
         .where(
-          and(
-            eq(schema.message.organizationId, orgId),
+          scoped(
+            schema.message.organizationId,
+            orgId,
             eq(schema.message.externalMessageId, extId)
           )
         )
@@ -206,7 +216,13 @@ export class OmniChannelManager {
     const [savedMsg] = await db
       .select()
       .from(schema.message)
-      .where(eq(schema.message.id, messageId))
+      .where(
+        scoped(
+          schema.message.organizationId,
+          orgId,
+          eq(schema.message.id, messageId)
+        )
+      )
       .limit(1);
 
     // 5. Publicar eventos en SSE para actualización en vivo de la bandeja

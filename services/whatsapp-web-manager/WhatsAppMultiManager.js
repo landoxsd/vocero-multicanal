@@ -9,8 +9,17 @@ const SESSION_STATUS = {
     STARTING: "STARTING",
     SCAN_QR_CODE: "SCAN_QR_CODE",
     WORKING: "WORKING",
-    FAILED: "FAILED"
+    FAILED: "FAILED",
+    RECONNECTING: "RECONNECTING"
 };
+
+function getManagerPublicUrl() {
+    return (
+        process.env.MANAGER_PUBLIC_URL ||
+        process.env.WA_WEB_MANAGER_PUBLIC_URL ||
+        `http://localhost:${process.env.PORT || 3005}`
+    ).replace(/\/$/, "");
+}
 
 function findSystemBrowserPath() {
     if (process.env.PUPPETEER_EXECUTABLE_PATH && fs.existsSync(process.env.PUPPETEER_EXECUTABLE_PATH)) {
@@ -42,10 +51,12 @@ class WhatsAppMultiManager {
         this.sessionsPath = path.resolve(options.sessionsPath || "./sessions");
         this.headless = options.headless !== undefined ? options.headless : false;
         this.webhookUrl = options.webhookUrl || "http://localhost:3000/api/webhooks/whatsapp-web";
+        this.webhookSecret = options.webhookSecret || process.env.WA_WEB_WEBHOOK_SECRET || null;
         this.remoteWaWebVersion = options.remoteWaWebVersion || 
             "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1014583151-alpha.html";
 
         this.sessions = new Map();
+        this.reconnectMaxAttempts = Number(process.env.WA_RECONNECT_MAX_ATTEMPTS || "12");
 
         this.onStatusChange = null;
         this.onMessage = null;
@@ -189,6 +200,7 @@ class WhatsAppMultiManager {
             console.log(`✅ [${sessionId}] WhatsApp CONECTADO Y OPERATIVO (WORKING)`);
             sessionObj.lastQr = null;
             sessionObj.ready = true;
+            sessionObj._reconnectAttempt = 0;
 
             this._updateStatus(sessionObj, SESSION_STATUS.WORKING);
         });
@@ -196,6 +208,11 @@ class WhatsAppMultiManager {
         client.on("auth_failure", (msg) => {
             console.error(`❌ [${sessionId}] ERROR DE AUTENTICACIÓN:`, msg);
             sessionObj.ready = false;
+            sessionObj._manualStop = true;
+            if (sessionObj._reconnectTimer) {
+                clearTimeout(sessionObj._reconnectTimer);
+                sessionObj._reconnectTimer = null;
+            }
 
             this._updateStatus(sessionObj, SESSION_STATUS.FAILED);
         });
@@ -203,8 +220,7 @@ class WhatsAppMultiManager {
         client.on("disconnected", (reason) => {
             console.warn(`⚠️ [${sessionId}] DESCONECTADO:`, reason);
             sessionObj.ready = false;
-
-            this._updateStatus(sessionObj, SESSION_STATUS.FAILED);
+            this._scheduleSilentReconnect(sessionId, sessionObj, reason);
         });
 
         client.on("message_create", async (msg) => {
@@ -229,7 +245,9 @@ class WhatsAppMultiManager {
 
                 const msgIdStr = msg.id ? (msg.id._serialized || msg.id.$1 || msg.id) : null;
                 const hasMedia = !!(msg.hasMedia || msg.type === "ptt" || msg.type === "audio" || msg.type === "image" || msg.type === "video" || msg.type === "sticker" || msg.type === "document");
-                const mediaUrl = (hasMedia && msgIdStr) ? `http://localhost:3005/api/media/${msgIdStr}` : null;
+                const mediaUrl = (hasMedia && msgIdStr)
+                    ? `${getManagerPublicUrl()}/api/media/${msgIdStr}`
+                    : null;
                 const mimetype = msg.mimetype || (msg.type === "ptt" || msg.type === "audio" ? "audio/ogg; codecs=opus" : (msg.type === "image" ? "image/jpeg" : null));
 
                 const payload = {
@@ -261,9 +279,92 @@ class WhatsAppMultiManager {
         });
     }
 
+    async _teardownSession(sessionId, { notify = true } = {}) {
+        const session = this.sessions.get(sessionId);
+        if (!session) return null;
+
+        const meta = {
+            webhookUrl: session.webhookUrl,
+            reconnectAttempt: session._reconnectAttempt || 0,
+            manualStop: Boolean(session._manualStop),
+        };
+
+        if (session._reconnectTimer) {
+            clearTimeout(session._reconnectTimer);
+            session._reconnectTimer = null;
+        }
+
+        try {
+            await session.client.destroy();
+        } catch (e) {}
+
+        if (notify) {
+            this._updateStatus(session, SESSION_STATUS.STOPPED);
+        }
+
+        this.sessions.delete(sessionId);
+        return meta;
+    }
+
+    _scheduleSilentReconnect(sessionId, sessionObj, reason) {
+        if (sessionObj._manualStop) return;
+        if (sessionObj._reconnectTimer) return;
+
+        const attempt = (sessionObj._reconnectAttempt || 0) + 1;
+        if (attempt > this.reconnectMaxAttempts) {
+            console.error(
+                `❌ [${sessionId}] Reconexión abandonada tras ${this.reconnectMaxAttempts} intentos (${reason})`
+            );
+            this._updateStatus(sessionObj, SESSION_STATUS.FAILED);
+            return;
+        }
+
+        sessionObj._reconnectAttempt = attempt;
+        const delay = Math.min(30000, 2000 * Math.pow(2, Math.min(attempt - 1, 4)));
+        const webhookUrl = sessionObj.webhookUrl;
+
+        console.log(
+            `🔄 [${sessionId}] Reconexión silenciosa en ${delay}ms (intento ${attempt}/${this.reconnectMaxAttempts})`
+        );
+        this._updateStatus(sessionObj, SESSION_STATUS.RECONNECTING);
+
+        sessionObj._reconnectTimer = setTimeout(async () => {
+            sessionObj._reconnectTimer = null;
+            const current = this.sessions.get(sessionId);
+            if (current?._manualStop) return;
+
+            const meta = await this._teardownSession(sessionId, { notify: false });
+            if (!meta || meta.manualStop) return;
+
+            try {
+                const newSession = this.createSession(sessionId, {
+                    webhookUrl: meta.webhookUrl || webhookUrl,
+                });
+                newSession._reconnectAttempt = meta.reconnectAttempt;
+            } catch (err) {
+                console.error(`⚠️ [${sessionId}] Falló reconexión:`, err.message);
+                const shell = {
+                    sessionId,
+                    webhookUrl: meta.webhookUrl || webhookUrl,
+                    _reconnectAttempt: meta.reconnectAttempt,
+                    _manualStop: false,
+                    client: null,
+                    status: SESSION_STATUS.RECONNECTING,
+                };
+                this.sessions.set(sessionId, shell);
+                this._scheduleSilentReconnect(sessionId, shell, err.message);
+            }
+        }, delay);
+    }
+
     async _sendWebhook(sessionObj, event, payload) {
         const targetUrl = sessionObj.webhookUrl || this.webhookUrl;
         if (!targetUrl) return;
+
+        const headers = { "Content-Type": "application/json" };
+        if (this.webhookSecret) {
+            headers["X-Webhook-Secret"] = this.webhookSecret;
+        }
 
         try {
             await axios.post(targetUrl, {
@@ -271,7 +372,7 @@ class WhatsAppMultiManager {
                 session: sessionObj.sessionId,
                 payload
             }, {
-                headers: { "Content-Type": "application/json" },
+                headers,
                 timeout: 15000  // aumentado a 15s para tolerar CRM lento al arrancar
             });
         } catch (e) {
@@ -609,11 +710,8 @@ class WhatsAppMultiManager {
     async stopSession(sessionId) {
         const session = this.sessions.get(sessionId);
         if (session) {
-            try {
-                await session.client.destroy();
-            } catch (e) {}
-            this._updateStatus(session, SESSION_STATUS.STOPPED);
-            this.sessions.delete(sessionId);
+            session._manualStop = true;
+            await this._teardownSession(sessionId, { notify: true });
             console.log(`🛑 Sesión [${sessionId}] detenida.`);
             return true;
         }

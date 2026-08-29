@@ -3,6 +3,13 @@
 Especificaciones de Vocero CRM. **Esta carpeta no es el mapa completo del
 producto** — y saberlo antes de leerla ahorra una confusión.
 
+La constitución vigente es **2.0.0** (fork omnicanal). Lo que hay abajo
+(`001`–`003`) describe el **Vocero original** (Cloud API). El producto de
+este repo —bandeja unificada, WhatsApp Web + Puppeteer, Gemini— está en
+[`PROJECT_GUIDE.md`](../PROJECT_GUIDE.md) y en el código; aún no tiene un
+`spec.md` propio. Las features nuevas de este fork declaran carril y dejan
+su spec aquí.
+
 ## Qué hay aquí
 
 | | Carril | Artefactos |

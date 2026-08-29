@@ -12,12 +12,14 @@ class OmniChannelManager {
     constructor(config = {}) {
         this.sessionsDir = config.sessionsDir || "./sessions";
         this.webhookUrl = config.webhookUrl || null;
+        this.webhookSecret = config.webhookSecret || null;
 
         // Instanciar los tres gestores de canales
         this.whatsapp = new WhatsAppMultiManager({
             sessionsPath: `${this.sessionsDir}/whatsapp`,
             headless: config.headless,
-            webhookUrl: this.webhookUrl
+            webhookUrl: this.webhookUrl,
+            webhookSecret: this.webhookSecret
         });
 
         this.instagram = new InstagramManager({

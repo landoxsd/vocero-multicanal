@@ -2,6 +2,10 @@
 
 Documento técnico y de gestión para guiar al equipo de desarrollo, DevOps y producto.
 
+La autoridad de producto es la [constitución v2.0.0](.specify/memory/constitution.md)
+(fork omnicanal de Vocero). Esta guía describe la arquitectura viva; si choca
+con la constitución, gana la constitución. La guía de agentes es [`CLAUDE.md`](CLAUDE.md).
+
 ---
 
 ## 1. Resumen Ejecutivo y Objetivos
@@ -151,9 +155,9 @@ Para operar y extender esta base de código, el equipo debe dominar:
 ### Fase 1: Perfeccionar Tiempo Real en WhatsApp Web (Inmediato)
 - [x] Sincronización directa desde el CRM al gestor de WhatsApp (`/api/sessions/:id/chats`).
 - [x] Normalización de identidades y teléfonos para emparejar chats existentes y nuevos.
-- [x] Auto-refresco periódico en `/inbox` (cada 3.5s).
-- [ ] **Socket / Long-Polling bidireccional:** Configurar un canal de WebSockets o un worker interno en Next.js para escuchar eventos directos del `whatsapp-web-manager` sin depender de webhooks HTTP externos en Docker.
-- [ ] **Reconexión Automática Silenciosa:** Si la sesión de WhatsApp Web se desconecta por inactividad, intentar reanudar la sesión usando las cookies de `LocalAuth` sin requerir re-escaneo del código QR.
+- [x] Auto-refresco periódico en `/inbox` (catch-up de respaldo cada 12s; SSE primario).
+- [x] **Reconexión automática silenciosa:** backoff exponencial con `LocalAuth` (hasta `WA_RECONNECT_MAX_ATTEMPTS`).
+- [ ] **Socket / Long-Polling bidireccional:** canal persistente manager → CRM sin depender solo del webhook HTTP.
 
 ### Fase 2: Activación de Canales Restantes
 - [ ] **Instagram Direct:** Habilitar el módulo `InstagramManager.js` para recibir DMs y respuestas a historias.

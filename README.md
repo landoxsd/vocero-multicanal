@@ -3,13 +3,15 @@
 [![CI](https://github.com/kevinrivm/vocero-crm/actions/workflows/ci.yml/badge.svg)](https://github.com/kevinrivm/vocero-crm/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**El CRM de WhatsApp open source con un agente de IA que se pone a prueba solo.**
+**Fork de Vocero: CRM omnicanal de atención unificada con IA integrada.**
 
-Vocero es un CRM self-hosted y gratuito para negocios que venden por WhatsApp:
-bandeja en tiempo real, pipeline de ventas, un agente de IA con el conocimiento
-de tu negocio y un **Laboratorio** donde clientes simulados lo evalúan antes de
-que hable con clientes reales. Una instancia = un negocio, en tu propio
-servidor, con tus datos.
+Este repositorio parte de [Vocero CRM](https://github.com/kevinrivm/vocero-crm)
+(MIT) y lo convierte en una bandeja unificada para varios canales — WhatsApp
+por **Cloud API** y por **WhatsApp Web + Puppeteer**, más adaptadores para
+Instagram, MercadoLibre y Messenger — con pipeline de ventas, un agente de IA
+(Gemini y/o OpenRouter) y el **Laboratorio** original, donde clientes simulados
+evalúan al agente antes de que hable con gente real. Una instancia = un
+negocio, en tu propio servidor.
 
 ¿Ya tienes tu propio agente? Puedes apagar el de Vocero y conectar el tuyo por
 la [API de servicio `/api/bot/*`](#-trae-tu-propio-agente): el token de WhatsApp
@@ -30,8 +32,8 @@ nunca sale del CRM.
 - **Agencias de IA/automatización** que implementan CRM + agente para sus
   clientes: despliegas una instancia por cliente en su VPS, la configuras y la
   entregas con evidencia de calidad (el reporte del Laboratorio).
-- **Negocios** que quieren atender WhatsApp con IA sin regalar sus datos a un
-  SaaS: todo corre en tu servidor.
+- **Negocios** que quieren atender WhatsApp (y el resto de canales conectados)
+  con IA sin regalar sus datos a un SaaS: todo corre en tu servidor.
 
 ## Features
 
@@ -51,13 +53,24 @@ LLM independiente evalúa cada conversación y te entrega:
 
 Deja de "esperar que el bot funcione": mídelo.
 
-### 💬 Bandeja de WhatsApp en tiempo real
+### 💬 Bandeja unificada
 
-Tres columnas (conversaciones / hilo / contacto), mensajes entrantes en ≤2
-segundos sin recargar, estados enviado/entregado/leído, ventana de 24 horas
-visible y bloqueada correctamente (con envío de plantilla aprobada cuando está
-cerrada), respuestas del agente marcadas como IA y handoff a humano con un
-click.
+Tres columnas (conversaciones / hilo / contacto). En Cloud API, mensajes
+entrantes en ≤2 segundos por SSE, estados enviado/entregado/leído, ventana de
+24 horas visible y bloqueada (plantilla aprobada cuando está cerrada). En
+WhatsApp Web la ventana de Meta **no aplica**: se envía texto libre y el hilo
+se mantiene al día por sync/polling con el manager. Respuestas del agente
+marcadas como IA y handoff a humano con un click.
+
+### 📱 WhatsApp Web + Puppeteer
+
+Además del camino oficial de Meta, puedes vincular números por **código QR**
+vía el microservicio `services/whatsapp-web-manager/` (whatsapp-web.js /
+Chromium). Sesiones persistentes, sync de chats históricos, identidad por
+dígitos (`+58` / `58` / `@c.us`). Es un cliente no oficial: úsalo a sabiendas
+(ToS de WhatsApp) y con los guardarraíles de prueba (allowlist, anti-flood).
+Hoy el manager va en el `docker-compose.yml` de la Ruta B (servicio
+`whatsapp-web-manager`, volumen de sesiones persistente).
 
 ### 📊 Contactos y pipeline kanban
 
@@ -72,7 +85,8 @@ Configura nombre, tono, instrucciones y reglas de escalado; dale conocimiento
 en pares pregunta/respuesta y bloques libres. Responde SOLO con lo que sabe,
 agrupa ráfagas de mensajes en una respuesta, escala a humano cuando el cliente
 lo pide (con detección de respaldo), cuando él lo decide o cuando algo falla.
-Proveedor LLM por adaptador OpenRouter-compatible: usa el modelo que quieras.
+Proveedor LLM por `src/lib/ai`: **Gemini nativo** (`GEMINI_API_KEY`) y/o
+cualquier endpoint OpenRouter-compatible.
 
 ### 🔌 Trae tu propio agente
 
@@ -105,16 +119,18 @@ Plantillas con varias variables `{{1}}…{{n}}` y aprobación de Meta
 sincronizada; cuentas de equipo creadas por el propietario (el registro público
 se cierra tras la primera organización); token de WhatsApp cifrado en reposo
 (AES-256-GCM),
-webhook autenticado en dos capas y cero dependencias de runtime más allá de
-Meta y tu proveedor LLM opcional.
+webhook de Cloud API autenticado en dos capas. El runtime de este fork incluye
+además el manager de WhatsApp Web (Puppeteer) cuando usas ese canal, y Gemini
+u OpenRouter si enciendes el agente.
 
 ## Requisitos
 
 - Un VPS con Docker (2 GB de RAM bastan) — con o sin [Coolify](https://coolify.io).
 - Un dominio apuntando al VPS (Meta exige **https** para webhooks).
-- Un número de WhatsApp en la Cloud API de Meta (ver [Conexión](#conexión-del-número-de-whatsapp)).
-- Opcional: una API key de [OpenRouter](https://openrouter.ai) (o cualquier
-  proveedor compatible) para el agente y el Laboratorio.
+- Un número de WhatsApp: **Cloud API** de Meta y/o una sesión de **WhatsApp Web**
+  (ver [Conexión](#conexión-del-número-de-whatsapp)).
+- Opcional: `GEMINI_API_KEY` y/o una key de [OpenRouter](https://openrouter.ai)
+  para el agente y el Laboratorio.
 
 ## Instalación (~15 minutos)
 
@@ -149,11 +165,29 @@ Caddy emite el certificado HTTPS solo. Verifica con
    **Ferretería El Martillo** (contactos, conversaciones, pipeline, un
    knowledge base con huecos a propósito y una corrida de Laboratorio de
    ejemplo — corre el Laboratorio y mira cómo los encuentra).
-3. La conexión de WhatsApp se hace después, en **Configuración → WhatsApp**.
+3. WhatsApp Cloud API: **Configuración → WhatsApp**. WhatsApp Web (QR):
+   **Configuración → Canales**, con el manager en marcha.
 
 ## Conexión del número de WhatsApp
 
-Vocero **consume** un token de la WhatsApp Cloud API — no implementa el
+Hay dos caminos. Pueden convivir en la misma instancia.
+
+### WhatsApp Web (QR + Puppeteer)
+
+1. Arranca `services/whatsapp-web-manager/` (puerto **3005** por defecto) y
+   apunta `WA_WEB_MANAGER_URL` del CRM a esa URL. Configura
+   `WA_WEB_WEBHOOK_SECRET` (mismo valor en CRM y manager) y, recomendado,
+   `WA_WEB_MANAGER_API_KEY`.
+2. En **Configuración → Canales** crea una cuenta WhatsApp Web y escanea el QR.
+3. Al conectar o pulsar **Sincronizar**, se importan chats y se unifican
+   contactos por dígitos de teléfono.
+
+Este camino no usa la ventana de 24 h ni plantillas de Meta. Es un cliente no
+oficial.
+
+### WhatsApp Cloud API
+
+El CRM **consume** un token de la WhatsApp Cloud API — no implementa el
 Embedded Signup. Hay dos formas de obtenerlo:
 
 ### Modo directo (el negocio tiene su propia app de Meta)
@@ -238,26 +272,29 @@ del cliente se conecta con el **override de callback por WABA**:
 En las variables de la instancia:
 
 ```bash
-OPENROUTER_API_TOKEN=sk-or-...        # tu key
+GEMINI_API_KEY=                       # nativo; modelo default gemini-3.6-flash
+GEMINI_MODEL=gemini-3.6-flash
+OPENROUTER_API_TOKEN=sk-or-...        # alternativa o complemento
 OPENROUTER_MODEL=anthropic/claude-sonnet-4.5
 OPENROUTER_JUDGE_MODEL=               # opcional: modelo distinto para el juez del Laboratorio
 OPENROUTER_BASE_URL=https://openrouter.ai/api   # o tu proveedor OpenAI-compatible
 ```
 
-Sin token, todo lo demás funciona; Agente y Laboratorio muestran cómo
-activarlos. Después configura el comportamiento y el conocimiento en la
-pestaña **Agente** y corre el **Laboratorio** antes de encender el agente con
-clientes reales.
+Sin ninguna key, todo lo demás funciona; Agente y Laboratorio muestran cómo
+activarlos. Si hay `GEMINI_API_KEY`, el adaptador la usa por defecto. Después
+configura el comportamiento y el conocimiento en la pestaña **Agente** y corre
+el **Laboratorio** antes de encender el agente con clientes reales.
 
 ## Cumplimiento con las políticas de Meta
 
 1. **Opt-in**: escribe solo a personas que iniciaron la conversación o
-   aceptaron recibir mensajes; Vocero respeta la ventana de 24 h y bloquea el
-   texto libre fuera de ella.
+   aceptaron recibir mensajes. En Cloud API, Vocero respeta la ventana de 24 h
+   y bloquea el texto libre fuera de ella. En WhatsApp Web esa regla de Meta
+   no aplica; el operador sigue siendo responsable del uso de la cuenta.
 2. **Plantillas aprobadas** para reabrir conversaciones: nada de trucos para
    saltarse la aprobación de Meta.
-3. **El Laboratorio es 100 % interno**: los clientes simulados jamás tocan la
-   API de WhatsApp (bloqueado por diseño y verificado con tests).
+3. **El Laboratorio es 100 % interno**: los clientes simulados jamás tocan un
+   canal real — ni Cloud API ni WhatsApp Web (bloqueado por diseño).
 4. **Sin spam ni broadcast**: Vocero no incluye envíos masivos; úsalo para
    conversaciones reales de venta y soporte.
 5. **Datos del cliente en su servidor**: cada negocio aloja su instancia; el
@@ -284,9 +321,9 @@ nuevo. En modo directo usa un token de usuario del sistema (no expira).
 permitidos (números de prueba de Meta) o el formato es inválido. Vocero ya
 normaliza los números de México (521 → 52).
 
-**El agente no responde** — ¿Token de IA configurado? ¿Toggle global
-encendido? ¿La conversación tiene la IA activa y sin handoff? ¿Ventana de 24 h
-abierta? Revisa también los logs de la instancia.
+**El agente no responde** — ¿`GEMINI_API_KEY` u `OPENROUTER_API_TOKEN`?
+¿Toggle global encendido? ¿La conversación tiene la IA activa y sin handoff?
+En Cloud API: ¿ventana de 24 h abierta? Revisa también los logs de la instancia.
 
 **`ENCRYPTION_KEY` inválida al arrancar** — Debe ser exactamente 32 bytes en
 base64 (44 caracteres): `openssl rand -base64 32`.
@@ -340,12 +377,11 @@ La versión vive en `package.json` y se sube en el PR que publica el cambio.
 
 ## Roadmap
 
-- Multimedia completa en la bandeja (hoy: indicador de tipo).
-- RAG para knowledge bases grandes (hoy: se inyecta completo con aviso de tamaño).
-- Personas configurables del Laboratorio y comparativas entre corridas.
-- Borrado de plantillas desde la app.
-- Analytics de conversación y plantillas.
-- Broadcast con opt-in verificado.
+Este fork (prioridad operativa): push en tiempo real manager→CRM (WebSocket),
+y activar Instagram / MercadoLibre / Messenger cuando estén cableados. Detalle en [`PROJECT_GUIDE.md`](PROJECT_GUIDE.md).
+
+Origen Vocero (aún válido): multimedia completa en la bandeja, RAG para
+knowledge bases grandes, personas configurables del Laboratorio.
 
 ### Fuera de alcance a propósito
 
@@ -363,10 +399,11 @@ adelanté, y esta es la aclaración.
 ## Stack
 
 Next.js 15 (App Router) + React 19 · TypeScript estricto · PostgreSQL +
-Drizzle ORM · Better Auth · Tailwind CSS · SSE (sin WebSockets) · Docker
-multi-stage con migraciones al arranque. Diseñado para que una agencia lo
-modifique con un asistente de IA: specs y decisiones de diseño en
-[`specs/`](specs/), guía de modificación en [`CLAUDE.md`](CLAUDE.md).
+Drizzle ORM · Better Auth · Tailwind CSS · SSE al navegador · manager de
+WhatsApp Web (Puppeteer) · Docker multi-stage con migraciones al arranque.
+Constitución v2.0.0 (omnicanal) en [`.specify/memory/constitution.md`](.specify/memory/constitution.md).
+Guía de modificación: [`CLAUDE.md`](CLAUDE.md). Specs `001`–`003` son el origen
+Cloud-only, no el mapa de este fork.
 
 ## Licencia
 
@@ -375,9 +412,7 @@ repo ayuda a que más gente lo encuentre.
 
 ## Créditos
 
-Creado por [Kevin Belier](https://www.youtube.com/@KevinBelier). ¿Quieres
-aprender a convertirte en Meta Tech Provider y monetizar con tu agencia de IA?
-Únete a la [VIBE Community](https://www.skool.com/vibe-community-vip). Los patrones
-de producción (webhook firmado, ingesta idempotente, cifrado de tokens) vienen
-de un proyecto de referencia privado en producción, portados y simplificados
-para este repo.
+Vocero original creado por [Kevin Belier](https://www.youtube.com/@KevinBelier).
+Este repositorio es un **fork** de atención unificada (WhatsApp Web + Puppeteer,
+canales, Gemini). Los patrones de producción del núcleo (webhook firmado,
+ingesta idempotente, cifrado de tokens) vienen del proyecto original.

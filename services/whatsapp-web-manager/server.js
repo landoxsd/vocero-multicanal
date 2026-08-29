@@ -19,7 +19,8 @@ const HEADLESS_MODE = process.env.HEADLESS !== "false";
 const omni = new OmniChannelManager({
     sessionsDir: SESSIONS_DIR,
     headless: HEADLESS_MODE,
-    webhookUrl: DEFAULT_WEBHOOK
+    webhookUrl: DEFAULT_WEBHOOK,
+    webhookSecret: process.env.WA_WEB_WEBHOOK_SECRET || null
 });
 
 // Middleware de API KEY (permite dashboard web local)

@@ -12,7 +12,19 @@ export class WhatsAppWebAdapter implements ChannelProviderAdapter {
 
   constructor() {
     this.managerUrl =
-      process.env.WA_WEB_MANAGER_URL || "http://127.0.0.1:3001";
+      process.env.WA_WEB_MANAGER_URL || "http://127.0.0.1:3005";
+  }
+
+  private managerHeaders(
+    extra?: Record<string, string>
+  ): Record<string, string> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...extra,
+    };
+    const apiKey = process.env.WA_WEB_MANAGER_API_KEY;
+    if (apiKey) headers["x-api-key"] = apiKey;
+    return headers;
   }
 
   async sendMessage(
@@ -28,7 +40,7 @@ export class WhatsAppWebAdapter implements ChannelProviderAdapter {
       if (payload.mediaUrl) {
         const response = await fetch(`${this.managerUrl}/api/sendMedia`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: this.managerHeaders(),
           body: JSON.stringify({
             session: sessionId,
             chatId: recipient,
@@ -55,7 +67,7 @@ export class WhatsAppWebAdapter implements ChannelProviderAdapter {
 
       const response = await fetch(`${this.managerUrl}/api/sendText`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: this.managerHeaders(),
         body: JSON.stringify({
           session: sessionId,
           chatId: recipient,
@@ -84,13 +96,15 @@ export class WhatsAppWebAdapter implements ChannelProviderAdapter {
   async getStatus(account: ChannelAccountRecord): Promise<ChannelStatus> {
     const sessionId = account.accountIdentifier || account.id;
     try {
-      const res = await fetch(`${this.managerUrl}/api/sessions/${sessionId}`);
+      const res = await fetch(`${this.managerUrl}/api/sessions/${sessionId}`, {
+        headers: this.managerHeaders(),
+      });
       if (!res.ok) return "disconnected";
       const data = await res.json();
       const rawStatus = (data.status as string) || "";
       if (rawStatus === "WORKING" || data.ready) return "connected";
       if (rawStatus === "SCAN_QR_CODE" || data.hasQr) return "scan_qr";
-      if (rawStatus === "STARTING") return "connecting";
+      if (rawStatus === "STARTING" || rawStatus === "RECONNECTING") return "connecting";
       return "disconnected";
     } catch {
       return "disconnected";
@@ -100,7 +114,9 @@ export class WhatsAppWebAdapter implements ChannelProviderAdapter {
   async getQrCode(account: ChannelAccountRecord): Promise<string | null> {
     const sessionId = account.accountIdentifier || account.id;
     try {
-      const res = await fetch(`${this.managerUrl}/api/sessions/${sessionId}`);
+      const res = await fetch(`${this.managerUrl}/api/sessions/${sessionId}`, {
+        headers: this.managerHeaders(),
+      });
       if (!res.ok) return null;
       const data = await res.json();
       return data.qr || data.qrCode || data.lastQr || null;
@@ -116,7 +132,7 @@ export class WhatsAppWebAdapter implements ChannelProviderAdapter {
     const sessionId = account.accountIdentifier || account.id;
     const res = await fetch(`${this.managerUrl}/api/sessions`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: this.managerHeaders(),
       body: JSON.stringify({
         name: sessionId,
         webhookUrl,
@@ -140,7 +156,10 @@ export class WhatsAppWebAdapter implements ChannelProviderAdapter {
     const sessionId = account.accountIdentifier || account.id;
     try {
       // 1. Obtener los chats y mensajes directamente desde el gestor de WhatsApp
-      const res = await fetch(`${this.managerUrl}/api/sessions/${sessionId}/chats?limit=50&msgs=20`);
+      const res = await fetch(
+        `${this.managerUrl}/api/sessions/${sessionId}/chats?limit=50&msgs=20`,
+        { headers: this.managerHeaders() }
+      );
       if (!res.ok) return { success: false };
       const data = (await res.json()) as {
         success?: boolean;
@@ -219,6 +238,7 @@ export class WhatsAppWebAdapter implements ChannelProviderAdapter {
     try {
       await fetch(`${this.managerUrl}/api/sessions/${sessionId}`, {
         method: "DELETE",
+        headers: this.managerHeaders(),
       });
     } catch {
       // Ignorar error al desconectar

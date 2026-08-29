@@ -1,61 +1,83 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Versión: 1.2.0 → 1.3.0
+Versión: 1.3.0 → 2.0.0
 
 Cambios:
-  - Principio VI "Specs Antes de Código" → EXPANDIDO: se definen tres carriles
-    (ciclo completo / carril ligero / exento) con un criterio objetivo para
-    elegir entre ellos —si toca el modelo de datos o un contrato publicado—, se
-    fija el contenido mínimo del `spec.md` del carril ligero, y se añaden dos
-    reglas: subir de carril al descubrir una migración a mitad de camino, y
-    marcar como tal todo spec escrito a posteriori.
-  - Sección "Flujo de Desarrollo y Puertas de Calidad" → ALINEADA con los carriles:
-    el orden del flujo pasa a depender del carril, y el Constitution Check se
-    declara obligatorio en AMBOS carriles (en el plan si es ciclo completo, en el
-    propio `spec.md` si es carril ligero). Sin esta aclaración el carril ligero
-    habría dejado la puerta constitucional sin sitio donde ocurrir, que sería un
-    debilitamiento —y por tanto un MAJOR—, no una expansión.
-  - Principios I, II, III, IV, V, VII, VIII y IX: íntegros (sin cambio).
-  - Governance: sin cambio.
+  - Principio II "Soberanía / Self-Hosted" → REDEFINIDO (incompatible con
+    1.x): la lista cerrada "solo Cloud API + OpenRouter, Google prohibido"
+    deja de ser la ley. Este fork es un CRM de atención unificada. Runtime
+    permitido: canales detrás de adaptadores (WhatsApp Cloud API, WhatsApp
+    Web self-hosted con Puppeteer, e Instagram / MercadoLibre / Messenger
+    cuando el adaptador esté cableado); LLM vía OpenRouter-compatible y/o
+    Gemini nativo. Siguen prohibidos S3/R2, email, Stripe/billing y Google
+    como almacenamiento/correo/login. El cliente no oficial de WhatsApp Web
+    es dependencia aceptada de ESTE fork, aislada en el microservicio
+    `whatsapp-web-manager`. La ventana 24 h y las plantillas aplican a
+    Cloud API, no bloquean canales Web/omnicanal.
+  - Principio VIII "Foco Vertical — CRM de Conversaciones y Leads de
+    WhatsApp" → REDEFINIDO y RETITULADO: el producto es atención unificada
+    (bandeja + pipeline + IA) para UN negocio; WhatsApp deja de ser el
+    único canal constitucional. Siguen fuera broadcast, scraping y
+    constructores visuales de flujos.
+  - Principio IV → EXPANDIDO: la clave de idempotencia es el id externo del
+    canal (`wa_message_id` / `externalMessageId`), no solo el de Meta.
+  - Restricciones de plataforma → ALINEADAS: adaptadores de canal +
+    `lib/ai`; webhooks de managers internos MUST autenticarse; consultas
+    omnicanal MUST pasar por `scoped()`; SSE al navegador; transporte
+    interno (polling o socket en red Docker) entre CRM y manager está
+    permitido y no sustituye SSE.
+  - Principios I, III, V, VI, VII, IX: íntegros en sustancia. IX ya cubría
+    herramientas no oficiales (allowlist, anti-flood); ahora aplica de
+    forma explícita al manager de WhatsApp Web.
+  - Párrafo de apertura: este repositorio es un fork de Vocero original.
+  - Governance: sin cambio de procedimiento; versión MAJOR.
 
-Bump: MINOR (1.2.0 → 1.3.0) — expansión material de un principio; no elimina ni
-redefine nada de forma incompatible. Lo que antes cumplía el ciclo completo lo
-sigue cumpliendo.
+Bump: MAJOR (1.3.0 → 2.0.0) — redefinición incompatible de II y VIII.
+Lo que cumplía 1.x "Cloud-only + OpenRouter" ya no es el producto. El
+código del fork (canales, Gemini, Puppeteer) pasa a ser constitucional,
+no una violación a remediar.
 
 Motivación:
-  El carril ligero NO es una práctica nueva: es la que el repositorio ya usa.
-  `001-vocero-core` llevó el ciclo completo (12 archivos, ~14.600 palabras)
-  porque era el producto entero; `002-diseno-atlas` se quedó en spec + plan
-  (~1.290 palabras) y `003-paridad-inbox`, en un solo `spec.md` (565 palabras).
-  Esa gradación funcionó, pero nunca se escribió — y sin el escalón intermedio
-  documentado, el siguiente paso hacia abajo acabó siendo ninguno: las features
-  entregadas entre la 003 y la versión 1.2.0 de la app se implementaron sin spec.
-  Esta enmienda ratifica la práctica existente y le pone criterio.
+  El dueño ratificó que esta instancia convierte Vocero en un CRM
+  omnicanal de atención unificada con IA integrada, y que WhatsApp se
+  opera también por WhatsApp Web + Puppeteer con mejoras propias. Sin
+  esta enmienda, CLAUDE.md y el Principio II ordenaban "arreglar" el
+  producto.
 
 Plantillas dependientes:
-  - .specify/templates/spec-template.md — ✅ compatible. Sus secciones
-    obligatorias (User Scenarios & Testing, Requirements, Success Criteria)
-    cubren de sobra el mínimo del carril ligero; en ese carril se rellenan solo
-    ellas y se omiten las opcionales.
-  - .specify/templates/plan-template.md — ✅ compatible (solo aplica al ciclo
-    completo; su Constitution Check se evalúa contra esta versión).
-  - .specify/templates/tasks-template.md — ✅ compatible (ídem).
-  - CLAUDE.md — ⚠ conviene reflejar los tres carriles cuando se actualice.
+  - .specify/templates/spec-template.md — ✅ compatible (sin secciones
+    nuevas obligatorias; el Constitution Check del carril ligero se
+    evalúa contra 2.0.0).
+  - .specify/templates/plan-template.md — ✅ compatible (el check cita
+    "gates from constitution file"; no hardcodeaba Cloud-only).
+  - .specify/templates/tasks-template.md — ✅ compatible.
+  - CLAUDE.md — ✅ actualizado a 2.0.0 (mapa de canales, manager, Gemini).
+  - README.md — ✅ actualizado: fork omnicanal, no vocero-core 1.x.
+  - .env.example — ✅ GEMINI_* y WA_WEB_MANAGER_URL.
+  - specs/README.md — ✅ aclara que 001–003 son el origen, no el mapa
+    actual.
+  - specs/001-vocero-core/* — ⚠ históricos a propósito; no se reescriben.
 
-TODOs diferidos:
-  - Deuda documental: las features entregadas entre `003` y la app 1.2.0 siguen
-    sin spec. Se pagan a posteriori y marcadas como tales (ver Principio VI).
+TODOs diferidos (cumplimiento, no redacción):
+  - Webhook `/api/webhooks/whatsapp-web` autenticado con `WA_WEB_WEBHOOK_SECRET`.
+  - `OmniChannelManager` usa `scoped()` en queries de dominio post-canal.
+  - `whatsapp-web-manager` en `docker-compose.yml` (Ruta B).
+  - Instagram / MercadoLibre / Messenger: adaptadores presentes, no
+    activados como producto.
 -->
 
 # Vocero CRM Constitution
 
-Vocero CRM es un CRM de WhatsApp con agente de IA, open source (MIT), self-hosted y
-gratuito, diseñado para que las agencias de IA lo desplieguen en el VPS de sus
-clientes: una instancia = un negocio. Esta constitución define las reglas no
-negociables del producto. Aplica a todas las fases del flujo de trabajo (specify,
-plan, tasks, implement). Cualquier conflicto entre una decisión de implementación y
-esta constitución SE RESUELVE A FAVOR de esta constitución.
+Este repositorio es un **fork de Vocero CRM** (MIT, origen: CRM self-hosted
+de WhatsApp Cloud API). El producto de este fork es un **CRM de atención
+unificada omnicanal** con agente de IA integrado: una bandeja, un pipeline y
+un cerebro, varios canales. Una instancia = un negocio.
+
+Esta constitución define las reglas no negociables del fork. Aplica a todas
+las fases del flujo de trabajo (specify, plan, tasks, implement). Cualquier
+conflicto entre una decisión de implementación y esta constitución SE
+RESUELVE A FAVOR de esta constitución.
 
 ## Core Principles
 
@@ -75,30 +97,50 @@ velocidad de entrega o conveniencia de desarrollo.
 **Rationale**: Una fuga de credenciales o un cruce de datos entre clientes es un
 fallo catastrófico e irreversible; prevenirlo siempre cuesta menos que remediarlo.
 
-### II. Soberanía / Self-Hosted (ENDURECIDO)
+### II. Soberanía / Self-Hosted (OMNICANAL)
 
-Vocero CRM opera completo sobre la infraestructura del operador. La lista de
-dependencias externas en runtime es CERRADA:
+Vocero (este fork) opera completo sobre la infraestructura del operador. Auth y
+base de datos son self-hosted (Better Auth + PostgreSQL de la instancia). Las
+integraciones externas se aíslan tras adaptadores; el dominio (contacto,
+conversación, lead, agente) no se acopla a un proveedor.
 
-- Dependencias externas permitidas en runtime, ÚNICAMENTE:
-  1. **WhatsApp Cloud API** (Meta Graph API) — el canal es la razón de ser del
-     producto.
-  2. **El proveedor LLM**, opcional, accedido EXCLUSIVAMENTE a través del adaptador
-     OpenRouter-compatible (`OPENROUTER_BASE_URL` / `OPENROUTER_MODEL`). Sin token
-     configurado, el producto funciona como CRM sin agente de IA.
-- **PROHIBIDO en v1**: almacenamiento de objetos externo (S3/R2), servicios de
-  email, Stripe u otro billing, y servicios de Google. Cualquier feature que los
-  requiera queda fuera del alcance de v1.
-- El instalador solo necesita: un VPS con Coolify o Docker, un dominio, credenciales
-  de Meta y (opcional) un token de OpenRouter. Nada más.
-- Las funciones core —autenticación y base de datos— corren self-hosted (Better
-  Auth + PostgreSQL propios de la instancia).
-- Las integraciones externas permitidas se aíslan tras adaptadores dedicados
-  (cliente Graph API propio; adaptador LLM) para no acoplar el dominio a ellas.
+Dependencias externas de runtime PERMITIDAS:
 
-**Rationale**: El producto se regala para que agencias lo desplieguen en VPS de
-clientes; cada dependencia externa adicional es un costo, un punto de fallo y una
-fuga de soberanía que rompe la promesa "gratis y tuyo".
+1. **Canales de mensajería**, cada uno detrás de un adaptador en
+   `src/server/channels/` o, para Cloud API, `src/lib/meta/` + `src/server/whatsapp/`:
+   - WhatsApp Cloud API (Meta Graph API) — camino oficial, ventana 24 h y plantillas.
+   - WhatsApp Web self-hosted — microservicio `services/whatsapp-web-manager/`
+     (Puppeteer / whatsapp-web.js). El CRM no habla con el DOM de WhatsApp; solo
+     con la API interna del manager. Cliente no oficial: aceptado en ESTE fork,
+     con los guardarraíles del Principio IX.
+   - Otros canales del modelo (`instagram`, `mercadolibre`, `facebook_messenger`)
+     cuando su adaptador esté cableado de punta a punta. Un enum en el schema no
+     equivale a un canal entregado.
+2. **Proveedor LLM**, opcional, accedido EXCLUSIVAMENTE por `src/lib/ai/`
+   (`chatJson<T>`): OpenRouter-compatible y/o **Gemini nativo** (`GEMINI_API_KEY`).
+   Sin ninguna key, el producto funciona como CRM sin agente.
+
+PROHIBIDO:
+
+- Almacenamiento de objetos externo (S3/R2), correo transaccional, Stripe u otro
+  billing.
+- Google como Drive, Gmail, OAuth de login o object storage. Gemini como LLM
+  detrás de `lib/ai` SÍ está permitido.
+- Hablar con WhatsApp Web, Instagram privado u otras APIs no oficiales desde el
+  monolito Next.js: eso vive en el manager o en el adaptador de canal.
+
+La ventana de 24 horas y las plantillas de Meta aplican a conversaciones del
+camino Cloud API. MUST NOT usarse esas reglas para bloquear envío en WhatsApp
+Web u otros canales que no las imponen.
+
+El instalador de este fork necesita: VPS con Docker, dominio HTTPS para webhooks
+oficiales, y según canales conectados: credenciales de Meta, el servicio del
+manager (Chromium) para WhatsApp Web, y (opcional) keys de LLM.
+
+**Rationale**: Self-hosted sigue siendo la promesa. El fork deja de fingir un
+solo canal; cada dependencia extra se paga en operación (Puppeteer, ToS, red
+Docker). Por eso los canales son adaptadores y el manager es un proceso aparte,
+no lógica mezclada en la bandeja.
 
 ### III. Multi-Tenancy Real
 
@@ -111,6 +153,8 @@ exigible y no cerrar la puerta a evoluciones.
 - El identificador de tenant (`organization_id`) es un parámetro de primer nivel en
   el modelo de datos y en la capa de acceso a datos, no un campo opcional añadido a
   posteriori. Toda tabla de dominio lo lleva NOT NULL e indexado org-first.
+- Toda query de dominio —incluida la ingesta omnicanal y los webhooks de
+  managers internos— MUST construirse con `scoped()` de `src/lib/db/tenant.ts`.
 
 **Rationale**: Multi-tenancy diseñado desde el inicio evita reescrituras costosas y
 hace cumplible el aislamiento del Principio I.
@@ -118,15 +162,18 @@ hace cumplible el aislamiento del Principio I.
 ### IV. Idempotencia en Integraciones Externas
 
 Todo evento entrante de un sistema externo (webhooks, callbacks, notificaciones de
-terceros) se procesa de forma idempotente.
+terceros, pushes o sync del manager de WhatsApp Web) se procesa de forma
+idempotente.
 
 - Recibir el mismo evento dos o más veces NO duplica efectos observables (mensajes
   reenviados, registros duplicados, acciones del agente repetidas).
-- Cada evento entrante se identifica de forma única (p. ej. `wa_message_id` UNIQUE)
-  y su procesamiento se registra para detectar y descartar reintentos.
+- Cada evento entrante se identifica de forma única por el id que emite el canal
+  (`wa_message_id` en Cloud API; `externalMessageId` u homólogo en el resto) y su
+  procesamiento se registra para detectar y descartar reintentos.
 
-**Rationale**: Los proveedores externos reintentan entregas por diseño; sin
-idempotencia, los reintentos corrompen datos y generan acciones duplicadas.
+**Rationale**: Los proveedores externos y el manager reintentan entregas por
+diseño; sin idempotencia, los reintentos corrompen datos y generan acciones
+duplicadas.
 
 ### V. Calidad Verificable Antes de "Hecho" (NO NEGOCIABLE)
 
@@ -152,9 +199,9 @@ la decisión queda por escrito:
 
 - **Ciclo completo** (`specify → plan → tasks → implement`) — obligatorio cuando la
   feature toca el **modelo de datos** (cualquier migración) o un **contrato
-  publicado** (`/api/bot/*`, el webhook, SSE, o un DTO que consuma algo fuera de
-  este repo). Ahí el coste de equivocarse no lo paga quien programa: lo paga quien
-  ya tiene datos guardados o un cliente conectado.
+  publicado** (`/api/bot/*`, webhooks, SSE, API del manager, o un DTO que consuma
+  algo fuera de este repo). Ahí el coste de equivocarse no lo paga quien programa:
+  lo paga quien ya tiene datos guardados o un cliente conectado.
 
 - **Carril ligero** (`spec.md` únicamente) — para features con comportamiento
   observable nuevo que NO tocan el modelo de datos ni un contrato. El `spec.md`
@@ -196,25 +243,26 @@ Las decisiones tomadas sin contexto suficiente se documentan para revisión huma
 **Rationale**: Las decisiones implícitas bajo incertidumbre son la principal fuente
 de deuda oculta; hacerlas visibles permite corregirlas a tiempo.
 
-### VIII. Foco Vertical — CRM de Conversaciones y Leads de WhatsApp
+### VIII. Foco Vertical — Atención Unificada (Conversaciones y Leads)
 
-Es un CRM de conversaciones y leads de WhatsApp que las agencias despliegan para
-negocios. No es plataforma de marketing masivo, ni constructor visual de flujos, ni
-herramienta de scraping. Lo que no ayude a *atender, organizar y convertir
-conversaciones de WhatsApp de UN negocio* se rechaza.
+Es un CRM de **atención unificada**: conversaciones y leads de los canales
+conectados, que se despliegan para UN negocio. No es plataforma de marketing
+masivo, ni constructor visual de flujos, ni herramienta de scraping. Lo que no
+ayude a *atender, organizar y convertir conversaciones de UN negocio* se rechaza.
 
 - El modelo de datos y los flujos MUST reflejar ese dominio: contactos que escriben
-  por WhatsApp, conversaciones con ventana de 24h, leads en un pipeline, un agente
-  de IA que atiende con el conocimiento del negocio y escala a humanos.
-- WhatsApp Cloud API es el canal; el producto es el CRM. Features de canal que no
+  por un canal, conversaciones en una bandeja, leads en un pipeline, un agente de
+  IA que atiende con el conocimiento del negocio y escala a humanos.
+- Los canales son adaptadores; el producto es el CRM. Features de canal que no
   sirvan a atender/organizar/convertir (broadcast masivo, scraping de números,
-  flujos visuales genéricos) quedan FUERA del alcance de v1.
-- Toda feature MUST servir a la agencia que despliega o al negocio que opera UNA
-  instancia. Lo que solo sirva a una plataforma centralizada (billing, planes,
-  multi-instancia) queda FUERA.
+  flujos visuales genéricos) quedan FUERA.
+- Toda feature MUST servir a quien despliega o al negocio que opera UNA instancia.
+  Lo que solo sirva a una plataforma centralizada (billing, planes, multi-instancia
+  como producto SaaS) queda FUERA.
 
-**Rationale**: Un foco vertical explícito mantiene el modelo de datos alineado con el
-negocio real y da un criterio claro para aceptar o rechazar alcance.
+**Rationale**: Un foco vertical explícito mantiene el modelo alineado con el
+negocio real y da un criterio claro para aceptar o rechazar alcance. Ampliar de
+"solo WhatsApp Cloud" a "omnicanal" no autoriza convertirlo en suite de marketing.
 
 ### IX. Verificación de Comportamiento en Vivo (NO NEGOCIABLE)
 
@@ -230,20 +278,20 @@ el piso, no el techo.
   dueño. Lo único delegable a verificación humana es lo intrínsecamente no verificable
   por herramientas (juicio visual, aprobación de un tercero), marcado explícitamente.
 - **Se conduce la interfaz real.** Navegador vía Playwright para features de UI; la línea
-  del canal (p. ej. una API de WhatsApp de prueba) para mensajería; llamadas a la API
-  donde esa sea la superficie. No basta con tipos/lint/build, ni con que un endpoint
-  devuelva 2xx, ni con inspeccionar la base de datos: se observa el resultado de cara al
-  usuario.
+  del canal (Cloud API de prueba, sesión de WhatsApp Web en entorno controlado, mock)
+  para mensajería; llamadas a la API donde esa sea la superficie. No basta con
+  tipos/lint/build, ni con que un endpoint devuelva 2xx, ni con inspeccionar la base
+  de datos: se observa el resultado de cara al usuario.
 - **Local primero, nube después.** Si el comportamiento puede reproducirse en `localhost`
   —incluyendo integraciones externas vía túnel (p. ej. ngrok + handshake del webhook desde
   el panel del proveedor)—, SHOULD probarse ahí antes de desplegar. El deploy a la nube se
   reserva para lo que el entorno local no pueda reproducir, porque desplegar consume tiempo
   y reduce la agilidad del ciclo.
-- **Guardarraíles con herramientas no oficiales.** Cuando la prueba use herramientas no
-  oficiales vinculadas a un número/cuenta real, MUST respetarse reglas duras: enviar solo a
-  destinatarios de una allowlist, NUNCA mensajes en ráfaga (anti-flood obligatorio), y
-  minimizar el volumen. La integridad de la cuenta del operador es un activo a proteger, en
-  línea con el Principio I.
+- **Guardarraíles con herramientas no oficiales.** WhatsApp Web / Puppeteer y cualquier
+  otra herramienta no oficial vinculada a un número o cuenta real MUST respetar reglas
+  duras: enviar solo a destinatarios de una allowlist, NUNCA mensajes en ráfaga
+  (anti-flood obligatorio), y minimizar el volumen. La integridad de la cuenta del
+  operador es un activo a proteger, en línea con el Principio I.
 
 **Rationale**: El gate técnico no detecta que un agente "se calló", que una tarjeta no
 llegó como un solo mensaje, o que un botón de UI no disparó nada — eso solo aparece
@@ -261,14 +309,21 @@ Estas restricciones derivan de los Principios I y II y son verificables en revis
 - **Cifrado en reposo**: credenciales y datos sensibles se almacenan cifrados; el
   almacenamiento en claro de secretos es una violación.
 - **Frontera de tenant**: la capa de acceso a datos exige el identificador
-  de tenant; cualquier acceso que pueda omitirlo requiere justificación explícita.
-- **Aislamiento de integraciones**: las dependencias de APIs externas se acceden a
-  través de adaptadores dedicados (cliente Graph API propio, adaptador LLM
-  OpenRouter-compatible), no dispersas por el dominio.
+  de tenant vía `scoped()`; cualquier acceso que pueda omitirlo requiere justificación
+  explícita.
+- **Aislamiento de integraciones**: Graph API, manager de WhatsApp Web, Gemini,
+  OpenRouter y el resto de canales se acceden a través de adaptadores dedicados
+  (`lib/meta`, `lib/ai`, `server/channels/*`), no dispersos por el dominio.
+- **Webhooks de managers internos**: MUST autenticarse (secreto compartido, red
+  privada, o equivalente). Un POST anónimo que acepte `session` no cumple el
+  Principio I.
+- **Tiempo real hacia el navegador**: SSE (`/api/events`). Entre el CRM y el
+  manager, en red privada Docker, se permite polling o un transporte interno
+  (incl. socket). Eso no sustituye SSE ni introduce colas externas.
 - **Instancia pública endurecida**: las rutas de mock/desarrollo devuelven 404
   incondicional en producción; el registro se cierra tras la primera organización
-  (salvo habilitación explícita); los entornos de prueba internos JAMÁS alcanzan la
-  API real de WhatsApp.
+  (salvo habilitación explícita); las conversaciones `is_test` del Laboratorio
+  JAMÁS alcanzan un canal real (Cloud API ni WhatsApp Web).
 
 ## Flujo de Desarrollo y Puertas de Calidad
 
@@ -311,6 +366,6 @@ práctica, convención o preferencia; ante un conflicto, gana la constitución.
   cumplimiento de estos principios. La complejidad que viole un principio debe
   justificarse; si no, debe eliminarse.
 - **Propagación**: al enmendar la constitución se revisan y, si procede, se actualizan
-  las plantillas dependientes (plan, spec, tasks).
+  las plantillas dependientes (plan, spec, tasks) y la guía de agentes (`CLAUDE.md`).
 
-**Version**: 1.3.0 | **Ratified**: 2026-07-09 | **Last Amended**: 2026-08-17
+**Version**: 2.0.0 | **Ratified**: 2026-07-09 | **Last Amended**: 2026-08-28

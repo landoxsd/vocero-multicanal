@@ -88,12 +88,13 @@ export function InboxClient() {
 
   useEffect(() => {
     void refetchConversations();
+    // SSE es el camino primario; este poll es catch-up de respaldo (webhook caído).
     const interval = setInterval(() => {
       void refetchConversations();
       if (selectedIdRef.current) {
         void refetchMessages(selectedIdRef.current);
       }
-    }, 3500);
+    }, 12000);
     return () => clearInterval(interval);
   }, [refetchConversations, refetchMessages]);
 

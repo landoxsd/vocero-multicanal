@@ -6,15 +6,14 @@ import { WhatsAppWebAdapter } from "@/server/channels/whatsapp-web/provider";
 
 export const dynamic = "force-dynamic";
 
-// Throttle global: máximo una sincronización cada 8 segundos para no saturar
-// el motor de WhatsApp Web con llamadas simultáneas mientras la UI hace polling.
+// Throttle global: máximo una sincronización cada 20 segundos para no saturar
+// el motor de WhatsApp Web. Con webhook + SSE activos es red de seguridad.
 let lastSync = 0;
 
 export const GET = withAuth(async (session, req: Request) => {
   const db = getDb();
 
-  // Sincronización proactiva en background (no bloquea la respuesta de la bandeja)
-  if (Date.now() - lastSync > 8000) {
+  if (Date.now() - lastSync > 20000) {
     lastSync = Date.now();
     db.select()
       .from(schema.channelAccount)

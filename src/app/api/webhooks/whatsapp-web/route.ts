@@ -1,12 +1,18 @@
 import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
+import { scoped } from "@/lib/db/tenant";
 import { omniChannelManager } from "@/server/channels/omnichannel-manager";
+import { requireWaWebWebhookSecret } from "@/server/channels/whatsapp-web/webhook-auth";
 
 export async function POST(req: Request) {
+  const authError = requireWaWebWebhookSecret(req);
+  if (authError) return authError;
+
   try {
     const body = await req.json();
-    const { event, session, payload, qr } = body;
+    const { event, session, payload } = body;
+    const qr = body.qr ?? payload?.qr;
 
     if (!session) {
       return NextResponse.json(
@@ -34,7 +40,14 @@ export async function POST(req: Request) {
       );
     }
 
-    // 1. Manejo de Código QR en tiempo real
+    const orgId = channel.organizationId;
+    const channelWhere = scoped(
+      schema.channelAccount.organizationId,
+      orgId,
+      eq(schema.channelAccount.id, channel.id)
+    );
+
+    // 1. Código QR
     if (event === "qr" && qr) {
       await db
         .update(schema.channelAccount)
@@ -43,12 +56,64 @@ export async function POST(req: Request) {
           qrCode: qr,
           updatedAt: new Date(),
         })
-        .where(eq(schema.channelAccount.id, channel.id));
+        .where(channelWhere);
 
       return NextResponse.json({ status: "qr_updated" });
     }
 
-    // 2. Manejo de Sesión Conectada / Lista
+    // 2. Estado de sesión (formato del manager)
+    if (event === "session.status") {
+      const status = payload?.status as string | undefined;
+      if (status === "WORKING") {
+        await db
+          .update(schema.channelAccount)
+          .set({
+            status: "connected",
+            qrCode: null,
+            errorMessage: null,
+            lastConnectedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(channelWhere);
+        return NextResponse.json({ status: "connected" });
+      }
+      if (status === "SCAN_QR_CODE" && qr) {
+        await db
+          .update(schema.channelAccount)
+          .set({
+            status: "scan_qr",
+            qrCode: qr,
+            updatedAt: new Date(),
+          })
+          .where(channelWhere);
+        return NextResponse.json({ status: "qr_updated" });
+      }
+      if (status === "STARTING" || status === "RECONNECTING") {
+        await db
+          .update(schema.channelAccount)
+          .set({
+            status: "connecting",
+            errorMessage: null,
+            updatedAt: new Date(),
+          })
+          .where(channelWhere);
+        return NextResponse.json({ status: "connecting" });
+      }
+      if (status === "FAILED" || status === "STOPPED") {
+        await db
+          .update(schema.channelAccount)
+          .set({
+            status: "disconnected",
+            qrCode: null,
+            errorMessage: payload?.error || "Sesión cerrada o desvinculada",
+            updatedAt: new Date(),
+          })
+          .where(channelWhere);
+        return NextResponse.json({ status: "disconnected" });
+      }
+    }
+
+    // 3. Sesión conectada (alias legacy)
     if (event === "ready" || event === "authenticated") {
       await db
         .update(schema.channelAccount)
@@ -59,34 +124,33 @@ export async function POST(req: Request) {
           lastConnectedAt: new Date(),
           updatedAt: new Date(),
         })
-        .where(eq(schema.channelAccount.id, channel.id));
+        .where(channelWhere);
 
       return NextResponse.json({ status: "connected" });
     }
 
-    // 3. Manejo de Desconexión
+    // 4. Desconexión
     if (event === "disconnected" || event === "auth_failure") {
       await db
         .update(schema.channelAccount)
         .set({
           status: "disconnected",
           qrCode: null,
-          errorMessage: body.error || "Sesión cerrada o desvinculada",
+          errorMessage: body.error || payload?.error || "Sesión cerrada o desvinculada",
           updatedAt: new Date(),
         })
-        .where(eq(schema.channelAccount.id, channel.id));
+        .where(channelWhere);
 
       return NextResponse.json({ status: "disconnected" });
     }
 
-    // 4. Manejo de Mensaje (Entrante o Saliente)
-    if (event === "message" || event === "message_create") {
+    // 5. Mensaje (entrante o saliente)
+    if (event === "message" || event === "message_create" || event === "message.any") {
       const isFromMe = Boolean(payload?.fromMe || body.fromMe);
       const targetJid = isFromMe
         ? (payload?.to || body.to || "")
         : (payload?.from || body.from || "");
 
-      // Ignorar estados/historias o mensajes sin destinatario
       if (!targetJid || targetJid === "status@broadcast" || targetJid === "me") {
         return NextResponse.json({ status: "ignored_broadcast_or_self" });
       }

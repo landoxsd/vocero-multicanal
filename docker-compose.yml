@@ -22,10 +22,42 @@ services:
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
       ALLOW_SIGNUP: ${ALLOW_SIGNUP:-}
       AGENT_COALESCE_MS: ${AGENT_COALESCE_MS:-6000}
+      WA_WEB_MANAGER_URL: http://whatsapp-web-manager:3005
+      WA_WEB_INTERNAL_WEBHOOK_URL: http://app:3000/api/webhooks/whatsapp-web
+      WA_WEB_WEBHOOK_SECRET: ${WA_WEB_WEBHOOK_SECRET}
+      WA_WEB_MANAGER_API_KEY: ${WA_WEB_MANAGER_API_KEY:-}
+      MEDIA_DIR: /data/media
+    volumes:
+      - vocero_media:/data/media
     depends_on:
       postgres:
         condition: service_healthy
     # el HEALTHCHECK vive en el Dockerfile (/api/health)
+
+  whatsapp-web-manager:
+    build: ./services/whatsapp-web-manager
+    restart: unless-stopped
+    shm_size: "512mb"
+    environment:
+      PORT: 3005
+      HEADLESS: "true"
+      SESSIONS_DIR: /app/sessions
+      DEFAULT_WEBHOOK_URL: http://app:3000/api/webhooks/whatsapp-web
+      WA_WEB_WEBHOOK_SECRET: ${WA_WEB_WEBHOOK_SECRET}
+      API_KEY: ${WA_WEB_MANAGER_API_KEY:-}
+      WA_RECONNECT_MAX_ATTEMPTS: ${WA_RECONNECT_MAX_ATTEMPTS:-12}
+      MANAGER_PUBLIC_URL: ${MANAGER_PUBLIC_URL:-}
+    volumes:
+      - vocero_wa_sessions:/app/sessions
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3005/health"]
+      interval: 20s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
 
   postgres:
     image: postgres:16-alpine
@@ -66,3 +98,5 @@ volumes:
   vocero_pg:
   vocero_caddy_data:
   vocero_caddy_config:
+  vocero_wa_sessions:
+  vocero_media:

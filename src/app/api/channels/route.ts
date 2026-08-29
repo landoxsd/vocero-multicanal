@@ -4,6 +4,7 @@ import { parseBody, withAuth } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { WhatsAppWebAdapter } from "@/server/channels/whatsapp-web/provider";
+import { waWebCrmWebhookUrl } from "@/server/channels/whatsapp-web/webhook-url";
 
 export const dynamic = "force-dynamic";
 
@@ -79,8 +80,7 @@ export const POST = withAuth(async (session, req: Request) => {
   // Si es WhatsApp Web, inicializar sesión con WhatsAppMultiManager
   if (body.data.provider === "whatsapp_web") {
     const waAdapter = new WhatsAppWebAdapter();
-    const appBaseUrl = process.env.APP_BASE_URL || "http://localhost:3000";
-    const webhookUrl = `${appBaseUrl}/api/webhooks/whatsapp-web`;
+    const webhookUrl = waWebCrmWebhookUrl();
 
     try {
       const initResult = await waAdapter.createSession(
