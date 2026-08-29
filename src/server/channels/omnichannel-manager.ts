@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { publish } from "@/server/events/bus";
@@ -53,9 +53,10 @@ export class OmniChannelManager {
     }
 
     const orgId = channel.organizationId;
+    const rawDigits = (payload.senderPhone || payload.senderId || "").replace(/\D/g, "");
     const identityKey =
       payload.provider === "whatsapp_web" || payload.platform === "whatsapp"
-        ? payload.senderPhone || payload.senderId
+        ? rawDigits || payload.senderPhone || payload.senderId
         : `${payload.platform}:${payload.senderId}`;
 
     // 2. Buscar o crear el contacto
@@ -66,7 +67,17 @@ export class OmniChannelManager {
       .where(
         and(
           eq(schema.contact.organizationId, orgId),
-          eq(schema.contact.waIdentity, identityKey)
+          or(
+            eq(schema.contact.waIdentity, identityKey),
+            eq(schema.contact.waIdentity, payload.senderId),
+            rawDigits ? eq(schema.contact.waIdentity, rawDigits) : undefined,
+            rawDigits ? eq(schema.contact.waIdentity, `+${rawDigits}`) : undefined,
+            rawDigits ? eq(schema.contact.phone, rawDigits) : undefined,
+            rawDigits ? eq(schema.contact.phone, `+${rawDigits}`) : undefined,
+            rawDigits
+              ? sql`regexp_replace(coalesce(${schema.contact.phone}, ''), '\\D', '', 'g') = ${rawDigits}`
+              : undefined
+          )
         )
       )
       .limit(1);
