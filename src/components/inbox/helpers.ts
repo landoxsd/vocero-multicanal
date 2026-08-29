@@ -52,8 +52,17 @@ export function liveWaitingMs(c: ConversationDto, now = Date.now()): number | nu
   return Math.max(0, now - Date.parse(c.lastInboundAt));
 }
 
+/** Más reciente primero (como WhatsApp). */
+export function sortInboxByDate(list: ConversationDto[]): ConversationDto[] {
+  return [...list].sort((a, b) => {
+    const aT = a.lastMessageAt ? Date.parse(a.lastMessageAt) : 0;
+    const bT = b.lastMessageAt ? Date.parse(b.lastMessageAt) : 0;
+    return bT - aT;
+  });
+}
+
 /** Cola operativa: handoff → más tiempo esperando → no leídas → recientes. */
-export function sortInboxConversations(list: ConversationDto[]): ConversationDto[] {
+export function sortInboxByPriority(list: ConversationDto[]): ConversationDto[] {
   return [...list].sort((a, b) => {
     const aHandoff = a.handoffAt ? 1 : 0;
     const bHandoff = b.handoffAt ? 1 : 0;

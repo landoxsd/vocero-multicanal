@@ -186,14 +186,19 @@ export async function processWaWebEvent(
       text,
       externalMessageId,
       mediaUrl: payload?.mediaUrl as string | undefined,
-      mediaType: payload?.type as
+      mimeType:
+        (typeof payload?.mimetype === "string" ? payload.mimetype : undefined) ??
+        (typeof payload?.mimeType === "string" ? payload.mimeType : undefined),
+      fileName:
+        payload?.type === "document" && text.trim() ? text.trim() : undefined,
+      mediaType: (payload?.type as string | undefined) as
         | "image"
         | "audio"
         | "video"
         | "document"
         | "sticker"
         | undefined,
-      metadata: payload,
+      metadata: payload as Record<string, unknown>,
       timestamp: payload?.timestamp
         ? new Date(Number(payload.timestamp) * 1000)
         : new Date(),

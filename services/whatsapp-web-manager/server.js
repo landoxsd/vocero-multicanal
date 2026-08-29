@@ -544,12 +544,33 @@ app.post("/api/sendText", checkApiKey, async (req, res) => {
 const mediaHandler = async (req, res) => {
     let session = req.body.session || req.body.sessionId || "default";
     const chatId = req.body.chatId;
-    const fileSource = req.body.fileSource || req.body.file || req.body.url;
-    const filename = req.body.filename || req.body.name || "adjunto.png";
+    let fileSource = req.body.fileSource || req.body.file || req.body.url || req.body.mediaUrl;
+    const filename = req.body.filename || req.body.fileName || req.body.name || "adjunto.png";
     const caption = req.body.caption || "";
 
     if (!chatId || !fileSource) {
         return res.status(400).json({ error: "Faltan parámetros: 'chatId', 'fileSource'" });
+    }
+
+    if (req.body.encoding === "base64" && typeof fileSource === "string") {
+        try {
+            fileSource = Buffer.from(fileSource, "base64");
+        } catch (e) {
+            return res.status(400).json({ error: "fileSource base64 inválido" });
+        }
+    } else if (
+        typeof fileSource === "string" &&
+        (fileSource.startsWith("http://") || fileSource.startsWith("https://"))
+    ) {
+        try {
+            const fetchRes = await fetch(fileSource);
+            if (!fetchRes.ok) {
+                return res.status(502).json({ error: `No se pudo descargar mediaUrl (${fetchRes.status})` });
+            }
+            fileSource = Buffer.from(await fetchRes.arrayBuffer());
+        } catch (e) {
+            return res.status(502).json({ error: `Error descargando mediaUrl: ${e.message}` });
+        }
     }
 
     const sessionObj = omni.whatsapp.sessions.get(session);

@@ -197,6 +197,18 @@ export async function ensureAssetAvailable(
   const asset = rows[0];
   if (!asset || asset.organizationId !== organizationId) return null;
   if (asset.fetchStatus === "available") return asset;
+
+  if (
+    typeof asset.payload === "object" &&
+    asset.payload !== null &&
+    (asset.payload as { source?: string }).source === "whatsapp_web"
+  ) {
+    const { ensureWaWebAssetAvailable } = await import(
+      "@/server/channels/whatsapp-web/media"
+    );
+    return ensureWaWebAssetAvailable(organizationId, assetId);
+  }
+
   if (!asset.waMediaId) return null; // location/contacts no tienen binario
 
   const creds = await getCredentialsByOrg(organizationId);

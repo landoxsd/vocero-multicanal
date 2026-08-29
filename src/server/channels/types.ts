@@ -55,7 +55,11 @@ export interface OutboundMessagePayload {
   channelAccountId: string;
   recipientId: string;
   text: string;
+  /** URL pública/absoluta (Cloud u otros canales). */
   mediaUrl?: string;
+  /** Binario para WhatsApp Web (el manager no puede leer /api/media del CRM). */
+  mediaData?: Buffer;
+  mimeType?: string;
   mediaType?: "image" | "audio" | "video" | "document" | "sticker";
   fileName?: string;
   replyToMessageId?: string;

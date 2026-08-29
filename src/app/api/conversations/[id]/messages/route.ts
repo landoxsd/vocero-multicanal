@@ -2,6 +2,7 @@ import { z } from "zod";
 import { apiError, parseBody, withAuth } from "@/lib/api";
 import { getConversation, listMessages } from "@/server/inbox/queries";
 import { serializeMessage } from "@/server/inbox/ingest";
+import { backfillWaWebMedia } from "@/server/channels/whatsapp-web/media";
 import { SendError, sendStructured, sendText } from "@/server/inbox/send";
 
 export const dynamic = "force-dynamic";
@@ -21,8 +22,22 @@ export const GET = withAuth(async (session, req: Request, ctx: Params) => {
     id,
     since && !Number.isNaN(since.getTime()) ? since : undefined
   );
+
+  // Mensajes WA Web viejos sin adjunto: intentar descargar del manager (máx. 12).
+  const rows = [...messages];
+  const stale = rows
+    .filter((r) => !r.media && r.message.channelAccountId)
+    .slice(-12);
+  for (const row of stale) {
+    const asset = await backfillWaWebMedia(
+      session.organizationId,
+      row.message
+    ).catch(() => null);
+    if (asset) row.media = asset;
+  }
+
   return Response.json({
-    messages: messages.map((r) => serializeMessage(r.message, r.media)),
+    messages: rows.map((r) => serializeMessage(r.message, r.media)),
   });
 });
 

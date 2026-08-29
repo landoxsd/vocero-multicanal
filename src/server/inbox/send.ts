@@ -293,7 +293,8 @@ export async function sendMediaMessage(input: {
         channelAccountId: channelAccount.id,
         recipientId: recipient,
         text: input.caption || "",
-        mediaUrl: `/api/media/${assetId}`,
+        mediaData: input.file.data,
+        mimeType: input.file.mimeType,
         mediaType: kind,
         fileName: input.file.fileName,
       });
@@ -327,7 +328,7 @@ export async function sendMediaMessage(input: {
       waMessageId,
       type: kind,
       text: input.caption ?? null,
-      status: "pending",
+      status: channelAccount ? "sent" : "pending",
       origin: "operator",
       mediaAssetId: assetId,
       media: asset,

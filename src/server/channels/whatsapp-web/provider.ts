@@ -37,18 +37,38 @@ export class WhatsAppWebAdapter implements ChannelProviderAdapter {
       : `${payload.recipientId}@c.us`;
 
     try {
-      if (payload.mediaUrl) {
+      if (payload.mediaData || payload.mediaUrl) {
+        const defaultName =
+          payload.fileName ||
+          (payload.mediaType === "image"
+            ? "imagen.jpg"
+            : payload.mediaType === "video"
+              ? "video.mp4"
+              : payload.mediaType === "audio"
+                ? "audio.ogg"
+                : payload.mediaType === "document"
+                  ? "documento.pdf"
+                  : "adjunto.bin");
+
+        const body: Record<string, unknown> = {
+          session: sessionId,
+          chatId: recipient,
+          filename: defaultName,
+          caption: payload.text || "",
+          mediaType: payload.mediaType,
+        };
+
+        if (payload.mediaData) {
+          body.fileSource = payload.mediaData.toString("base64");
+          body.encoding = "base64";
+        } else {
+          body.mediaUrl = payload.mediaUrl;
+        }
+
         const response = await fetch(`${this.managerUrl}/api/sendMedia`, {
           method: "POST",
           headers: this.managerHeaders(),
-          body: JSON.stringify({
-            session: sessionId,
-            chatId: recipient,
-            mediaUrl: payload.mediaUrl,
-            caption: payload.text || "",
-            mediaType: payload.mediaType,
-            fileName: payload.fileName,
-          }),
+          body: JSON.stringify(body),
         });
 
         const data = await response.json();

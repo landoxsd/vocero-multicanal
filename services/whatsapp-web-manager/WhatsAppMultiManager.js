@@ -520,90 +520,228 @@ class WhatsAppMultiManager {
         return { chats: chats.length, sent, errors };
     }
 
+    _normalizeDownloadInput(msg) {
+        if (typeof msg === "string") {
+            return {
+                msgIdObj: { _serialized: msg, $1: msg },
+                msgIdStr: msg,
+                nativeMsg: null,
+            };
+        }
+        if (msg && typeof msg === "object") {
+            if (typeof msg.downloadMedia === "function") {
+                const id = msg.id || {};
+                const msgIdStr =
+                    id._serialized || id.$1 || (typeof id === "string" ? id : String(id));
+                return { msgIdObj: id, msgIdStr, nativeMsg: msg };
+            }
+            if (msg.id) {
+                const id =
+                    typeof msg.id === "string"
+                        ? { _serialized: msg.id, $1: msg.id }
+                        : msg.id;
+                const msgIdStr =
+                    typeof msg.id === "string"
+                        ? msg.id
+                        : msg.id._serialized || msg.id.$1 || String(msg.id);
+                return { msgIdObj: id, msgIdStr, nativeMsg: null };
+            }
+        }
+        const fallback = String(msg ?? "");
+        return {
+            msgIdObj: { _serialized: fallback, $1: fallback },
+            msgIdStr: fallback,
+            nativeMsg: null,
+        };
+    }
+
+    /**
+     * Descarga adjuntos con el parche $1 de IndexedDB (PMV-CORE) y fallback nativo.
+     * Acepta messageId string, { id }, o instancia Message de whatsapp-web.js.
+     */
     async downloadMedia(sessionId, msg) {
         const session = this.sessions.get(sessionId);
         if (!session || !session.client) return null;
 
-        const msgIdStr = typeof msg === "string" ? msg : (msg ? (msg.id ? (msg.id._serialized || msg.id.$1 || msg.id) : String(msg)) : "");
+        const { msgIdObj, msgIdStr, nativeMsg } = this._normalizeDownloadInput(msg);
+        if (!msgIdStr) return null;
+
+        let media = null;
 
         try {
-            if (msg && typeof msg.downloadMedia === "function") {
-                const standardMedia = await msg.downloadMedia();
-                if (standardMedia && standardMedia.data) {
-                    return standardMedia;
-                }
-            }
-        } catch (e) {
-            console.log(`ℹ️ [${sessionId}] downloadMedia estándar falló, aplicando Parche $1 de IndexedDB...`);
-        }
+            const page =
+                session.client.pupPage ||
+                (session.client.pupBrowser &&
+                    (await session.client.pupBrowser.pages())[0]);
+            if (page) {
+                media = await page.evaluate(
+                    async (msgIdObjParam, msgIdStrParam) => {
+                        const { Msg } = window.require("WAWebCollections");
+                        const { createWid } = window.require("WAWebWidFactory");
+                        const msgIdStr =
+                            msgIdStrParam ||
+                            msgIdObjParam._serialized ||
+                            msgIdObjParam.$1;
+                        const key1 = {
+                            ...msgIdObjParam,
+                            remote:
+                                typeof msgIdObjParam.remote === "string"
+                                    ? createWid(msgIdObjParam.remote)
+                                    : msgIdObjParam.remote,
+                            participant:
+                                typeof msgIdObjParam.participant === "string"
+                                    ? createWid(msgIdObjParam.participant)
+                                    : msgIdObjParam.participant,
+                            _serialized: msgIdStr,
+                            $1: msgIdStr,
+                        };
+                        const key2 = {
+                            fromMe: msgIdObjParam.fromMe,
+                            remote: key1.remote,
+                            id: msgIdObjParam.id,
+                            participant: key1.participant,
+                            _serialized: msgIdStr,
+                            $1: msgIdStr,
+                        };
+                        const candidates = [key2, key1, msgIdStr];
 
-        try {
-            const page = session.client.pupPage || (session.client.pupBrowser && (await session.client.pupBrowser.pages())[0]);
-            if (!page) return null;
+                        let message = null;
+                        let debugLog = "";
+                        for (const cand of candidates) {
+                            try {
+                                const m = Msg.get(cand);
+                                if (m && m.mediaData) {
+                                    message = m;
+                                    break;
+                                }
+                            } catch (e) {
+                                debugLog += `get(${typeof cand}) err: ${e.message}; `;
+                            }
 
-            const mediaResult = await page.evaluate(async (targetId) => {
-                const { Msg } = window.require('WAWebCollections');
-                let message = Msg.getModelsArray().find(m => 
-                    m.id && (m.id._serialized === targetId || m.id.$1 === targetId || m.id.id === targetId)
+                            try {
+                                const dbRes = await Msg.getMessagesById([cand]);
+                                if (
+                                    dbRes &&
+                                    dbRes.messages &&
+                                    dbRes.messages.length > 0 &&
+                                    dbRes.messages[0] &&
+                                    dbRes.messages[0].mediaData
+                                ) {
+                                    message = dbRes.messages[0];
+                                    break;
+                                }
+                            } catch (e) {
+                                debugLog += `db(${typeof cand}) err: ${e.message}; `;
+                            }
+                        }
+
+                        if (!message) {
+                            message = Msg.getModelsArray().find(
+                                (m) => m.id && m.id._serialized === msgIdStr
+                            );
+                        }
+                        if (!message) {
+                            return {
+                                error:
+                                    "Message not found in WAWebCollections. " +
+                                    debugLog,
+                            };
+                        }
+
+                        if (
+                            message.mediaData &&
+                            message.mediaData.mediaStage === "REUPLOADING"
+                        ) {
+                            return { error: "mediaData is REUPLOADING" };
+                        }
+
+                        try {
+                            await message.downloadMedia({
+                                downloadEvenIfExpensive: true,
+                                rmrReason: 1,
+                                isUserInitiated: true,
+                            });
+                        } catch (e) {
+                            debugLog += "downloadMedia err: " + e.message + ". ";
+                        }
+
+                        if (
+                            message.mediaData &&
+                            (message.mediaData.mediaStage.includes("ERROR") ||
+                                message.mediaData.mediaStage === "FETCHING")
+                        ) {
+                            return { error: "mediaStage is ERROR or FETCHING" };
+                        }
+
+                        const cached = window
+                            .require("WAWebMediaInMemoryBlobCache")
+                            .InMemoryMediaBlobCache.get(
+                                message.mediaObject?.filehash
+                            );
+
+                        let blob;
+                        if (cached) {
+                            blob = cached;
+                        } else if (message.mediaObject?.mediaBlob) {
+                            blob = message.mediaObject.mediaBlob.forceToBlob();
+                        }
+
+                        if (!blob) {
+                            return {
+                                error: `Blob could not be extracted. mediaObject: ${!!message.mediaObject}, cached: ${!!cached}. debug: ${debugLog}`,
+                            };
+                        }
+
+                        const data = await window.WWebJS.arrayBufferToBase64Async(
+                            await blob.arrayBuffer()
+                        );
+                        return {
+                            data,
+                            mimetype: message.mimetype,
+                            filename: message.filename,
+                            filesize: message.size,
+                        };
+                    },
+                    msgIdObj,
+                    msgIdStr
                 );
 
-                if (!message) {
-                    try {
-                        const dbRes = await Msg.getMessagesById([targetId]);
-                        if (dbRes && dbRes.messages && dbRes.messages[0]) {
-                            message = dbRes.messages[0];
-                        }
-                    } catch (e) {}
+                if (media && media.error) {
+                    console.error(
+                        `⚠️ [${sessionId}] Parche $1: ${media.error}`
+                    );
+                    media = null;
+                } else if (media && media.data) {
+                    console.log(
+                        `✅ [${sessionId}] Media descargada (parche $1) para ${msgIdStr}`
+                    );
                 }
-
-                if (!message) return { error: "Mensaje no encontrado en WAWebCollections: " + targetId };
-
-                try {
-                    await message.downloadMedia({
-                        downloadEvenIfExpensive: true,
-                        rmrReason: 1,
-                        isUserInitiated: true,
-                    });
-                } catch(e) {}
-
-                let blob;
-                const cached = window.require('WAWebMediaInMemoryBlobCache')?.InMemoryMediaBlobCache?.get(message.mediaObject?.filehash);
-                if (cached) {
-                    blob = cached;
-                } else if (message.mediaObject?.mediaBlob) {
-                    blob = message.mediaObject.mediaBlob.forceToBlob();
-                } else if (message.body && typeof message.body === 'string' && (message.body.startsWith('/9j/') || message.body.startsWith('iVBORw0KGgo'))) {
-                    const mime = message.body.startsWith('/9j/') ? "image/jpeg" : "image/png";
-                    return {
-                        data: message.body,
-                        mimetype: mime,
-                        filename: "imagen.jpg",
-                        filesize: message.body.length
-                    };
-                }
-
-                if (!blob) return { error: "No se pudo extraer el Blob de la imagen o audio." };
-
-                const data = await window.WWebJS.arrayBufferToBase64Async(await blob.arrayBuffer());
-                return {
-                    data,
-                    mimetype: message.mimetype || "audio/ogg; codecs=opus",
-                    filename: message.filename || "audio.ogg",
-                    filesize: message.size
-                };
-            }, msgIdStr);
-
-            if (mediaResult && !mediaResult.error) {
-                console.log(`✅ [${sessionId}] Media descargada exitosamente para ID ${msgIdStr}`);
-                return mediaResult;
-            } else {
-                console.error(`❌ [${sessionId}] Error en extraction media evaluate:`, mediaResult ? mediaResult.error : "resultado nulo");
             }
         } catch (err) {
-            console.error(`❌ [${sessionId}] Error aplicando Parche Anti-Ofuscación:`, err.message);
+            console.error(
+                `⚠️ [${sessionId}] Error en parche $1 de descarga:`,
+                err.message
+            );
         }
 
-        return null;
+        if (!media && nativeMsg) {
+            try {
+                console.log(
+                    `ℹ️ [${sessionId}] Fallback downloadMedia() nativo para ${msgIdStr}`
+                );
+                const stdMedia = await nativeMsg.downloadMedia();
+                if (stdMedia && stdMedia.data) {
+                    media = stdMedia;
+                }
+            } catch (err) {
+                console.error(
+                    `⚠️ [${sessionId}] Fallback nativo falló:`,
+                    err.message
+                );
+            }
+        }
+
+        return media;
     }
 
     async getScreenshot(sessionId) {

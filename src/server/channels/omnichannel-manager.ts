@@ -6,6 +6,10 @@ import { publish } from "@/server/events/bus";
 import { onLeadActivity } from "@/server/inbox/lead-activity";
 import { maybeRunAgentTurn } from "@/server/ai/trigger";
 import { WhatsAppWebAdapter } from "./whatsapp-web/provider";
+import {
+  normalizeWaWebMediaKind,
+  storeWaWebMediaAsset,
+} from "./whatsapp-web/media";
 import { InstagramAdapter } from "./instagram/provider";
 import { MercadoLibreAdapter } from "./mercadolibre/provider";
 import { FacebookMessengerAdapter } from "./facebook/provider";
@@ -194,6 +198,26 @@ export class OmniChannelManager {
     }
 
     const messageId = newId("message");
+    const meta = payload.metadata as Record<string, unknown> | undefined;
+    const mimeType =
+      payload.mimeType ??
+      (typeof meta?.mimetype === "string" ? meta.mimetype : null) ??
+      (typeof meta?.mimeType === "string" ? meta.mimeType : null);
+    const hasMedia = Boolean(
+      payload.mediaUrl ||
+        meta?.hasMedia ||
+        payload.mediaType
+    );
+    const mediaKind =
+      payload.provider === "whatsapp_web"
+        ? normalizeWaWebMediaKind(
+            payload.mediaType || (typeof meta?.type === "string" ? meta.type : undefined),
+            mimeType,
+            hasMedia
+          )
+        : payload.mediaType ?? null;
+    const msgType = mediaKind || (payload.text ? "text" : payload.mediaType || "text");
+
     await db.insert(schema.message).values({
       id: messageId,
       organizationId: orgId,
@@ -206,12 +230,33 @@ export class OmniChannelManager {
           ? extId
           : null,
       direction: isOutbound ? "out" : "in",
-      type: payload.mediaType || "text",
+      type: msgType,
       text: payload.text || "",
       status: "delivered",
       metadata: payload.metadata || null,
       createdAt: msgTimestamp,
     });
+
+    if (
+      payload.provider === "whatsapp_web" &&
+      mediaKind &&
+      extId
+    ) {
+      const fileName =
+        payload.fileName ??
+        (mediaKind === "document" && payload.text?.trim()
+          ? payload.text.trim()
+          : null);
+      void storeWaWebMediaAsset({
+        organizationId: orgId,
+        messageId,
+        waMessageId: extId,
+        kind: mediaKind,
+        mimeType,
+        fileName,
+        caption: payload.text || null,
+      }).catch(() => null);
+    }
 
     const [savedMsg] = await db
       .select()

@@ -8,7 +8,10 @@ import { cn } from "@/lib/utils";
 import { ContactAvatar } from "@/components/avatar";
 import { Button } from "@/components/ui/button";
 import { ChannelBadge } from "@/components/channels/channel-badge";
-import { formatTime, liveWaitingMs, previewText, sortInboxConversations, formatWaiting, waitingUrgency } from "./helpers";
+import { formatTime, liveWaitingMs, previewText, sortInboxByDate, sortInboxByPriority, formatWaiting, waitingUrgency } from "./helpers";
+
+export type InboxSortMode = "date" | "priority";
+const INBOX_SORT_KEY = "vocero.inboxSort";
 
 const STAGE_DOT: Record<string, string> = {
   Nuevo: "#9ca3af",
@@ -77,9 +80,20 @@ export function ConversationList({
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "unread" | "waiting">("all");
+  const [sortMode, setSortMode] = useState<InboxSortMode>("date");
   const [stage, setStage] = useState<string>("all");
   const [now, setNow] = useState(() => Date.now());
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const stored = localStorage.getItem(INBOX_SORT_KEY);
+    if (stored === "priority") setSortMode("priority");
+  }, []);
+
+  function changeSortMode(mode: InboxSortMode) {
+    setSortMode(mode);
+    localStorage.setItem(INBOX_SORT_KEY, mode);
+  }
 
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 30_000);
@@ -119,7 +133,11 @@ export function ConversationList({
       : filter === "waiting"
         ? searched.filter((c) => c.needsReply)
         : searched;
-  const visible = sortInboxConversations(filtered);
+  const sorted =
+    sortMode === "priority"
+      ? sortInboxByPriority(filtered)
+      : sortInboxByDate(filtered);
+  const visible = sorted;
 
   // Etapas presentes en la bandeja, en el orden en que llegan del pipeline.
   const stages: string[] = [];
@@ -207,7 +225,7 @@ export function ConversationList({
             onChange={(e) => setStage(e.target.value)}
             aria-label="Filtrar por etapa del embudo"
             className={cn(
-              "ml-auto min-w-0 max-w-[42%] truncate rounded-full border px-2 py-[5px] text-[12.5px] font-medium transition-colors",
+              "min-w-0 max-w-[38%] truncate rounded-full border px-2 py-[5px] text-[12.5px] font-medium transition-colors",
               stage === "all"
                 ? "bg-background text-text-2 hover:bg-accent"
                 : "border-brand bg-brand text-brand-fg"
@@ -221,6 +239,22 @@ export function ConversationList({
             ))}
           </select>
         )}
+
+        <select
+          value={sortMode}
+          onChange={(e) => changeSortMode(e.target.value as InboxSortMode)}
+          aria-label="Ordenar conversaciones"
+          className={cn(
+            "shrink-0 rounded-full border px-2 py-[5px] text-[12.5px] font-medium transition-colors",
+            sortMode === "priority"
+              ? "border-brand bg-brand text-brand-fg"
+              : "bg-background text-text-2 hover:bg-accent",
+            stages.length === 0 ? "ml-auto" : ""
+          )}
+        >
+          <option value="date">Más recientes</option>
+          <option value="priority">Prioridad</option>
+        </select>
       </div>
 
       <div className="flex-1 overflow-y-auto">
