@@ -6,15 +6,17 @@ import { WhatsAppWebAdapter } from "@/server/channels/whatsapp-web/provider";
 
 export const dynamic = "force-dynamic";
 
+// Throttle global: máximo una sincronización cada 8 segundos para no saturar
+// el motor de WhatsApp Web con llamadas simultáneas mientras la UI hace polling.
 let lastSync = 0;
 
 export const GET = withAuth(async (session, req: Request) => {
   const db = getDb();
-  // Sincronización proactiva en vivo para WhatsApp Web (throttled a 4s)
-  if (Date.now() - lastSync > 4000) {
+
+  // Sincronización proactiva en background (no bloquea la respuesta de la bandeja)
+  if (Date.now() - lastSync > 8000) {
     lastSync = Date.now();
-    const channels = await db
-      .select()
+    db.select()
       .from(schema.channelAccount)
       .where(
         and(
@@ -22,14 +24,16 @@ export const GET = withAuth(async (session, req: Request) => {
           eq(schema.channelAccount.provider, "whatsapp_web"),
           eq(schema.channelAccount.status, "connected")
         )
-      );
-
-    if (channels.length > 0) {
-      const waAdapter = new WhatsAppWebAdapter();
-      for (const ch of channels) {
-        await waAdapter.syncChats(ch).catch(() => null);
-      }
-    }
+      )
+      .then(async (channels) => {
+        if (channels.length > 0) {
+          const waAdapter = new WhatsAppWebAdapter();
+          for (const ch of channels) {
+            await waAdapter.syncChats(ch).catch(() => null);
+          }
+        }
+      })
+      .catch(() => null);
   }
 
   const url = new URL(req.url);
@@ -41,3 +45,4 @@ export const GET = withAuth(async (session, req: Request) => {
   );
   return Response.json({ conversations });
 });
+

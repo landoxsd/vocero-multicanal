@@ -165,7 +165,24 @@ export class OmniChannelManager {
         .where(eq(schema.conversation.id, convId));
     }
 
-    // 4. Guardar el mensaje (inbound u outbound)
+    // 4. Guardar el mensaje — idempotente por externalMessageId para evitar duplicados en polling
+    const extId = payload.externalMessageId || `ext_${Date.now()}_${Math.random()}`;
+    if (payload.externalMessageId) {
+      const [existingMsg] = await db
+        .select({ id: schema.message.id })
+        .from(schema.message)
+        .where(
+          and(
+            eq(schema.message.organizationId, orgId),
+            eq(schema.message.externalMessageId, extId)
+          )
+        )
+        .limit(1);
+      if (existingMsg) {
+        return { messageId: existingMsg.id, conversationId: convId, contactId };
+      }
+    }
+
     const messageId = newId("message");
     await db.insert(schema.message).values({
       id: messageId,
@@ -173,10 +190,10 @@ export class OmniChannelManager {
       conversationId: convId,
       channelAccountId: channel.id,
       platform: payload.platform,
-      externalMessageId: payload.externalMessageId || `ext_${Date.now()}`,
+      externalMessageId: extId,
       waMessageId:
         payload.provider === "whatsapp_web"
-          ? payload.externalMessageId || `waw_${Date.now()}`
+          ? extId
           : null,
       direction: isOutbound ? "out" : "in",
       type: payload.mediaType || "text",

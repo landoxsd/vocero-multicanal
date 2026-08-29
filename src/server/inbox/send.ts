@@ -148,7 +148,7 @@ async function persistOutbound(input: {
   waMessageId: string | null;
   type: string;
   text: string | null;
-  status: "pending" | "failed";
+  status: "pending" | "sent" | "failed";
   error?: string | null;
   aiGenerated?: boolean;
   origin: "ai" | "operator";
@@ -224,13 +224,17 @@ export async function sendText(input: {
     });
   }
 
+  // Para WhatsApp Web (WPPConnect) el envío ya confirmó entrega de forma síncrona.
+  // Para Cloud API de Meta, el estado real llega por webhook de status después.
+  const initialStatus = channelAccount ? "sent" : "pending";
+
   const messageId = await persistOutbound({
     organizationId: input.organizationId,
     conversationId: input.conversationId,
     waMessageId,
     type: "text",
     text: input.text,
-    status: "pending",
+    status: initialStatus,
     aiGenerated: input.aiGenerated,
     origin: input.aiGenerated ? "ai" : "operator",
   });
