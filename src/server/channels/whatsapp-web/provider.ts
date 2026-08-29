@@ -179,6 +179,17 @@ export class WhatsAppWebAdapter implements ChannelProviderAdapter {
             ? (chat.name || cleanPhone)
             : (msg._data?.notifyName || msg._data?.pushName || chat.name || cleanPhone);
 
+          let mediaType: "image" | "audio" | "video" | "document" | "sticker" | undefined = undefined;
+          if (
+            msg.type === "image" ||
+            msg.type === "audio" ||
+            msg.type === "video" ||
+            msg.type === "document" ||
+            msg.type === "sticker"
+          ) {
+            mediaType = msg.type;
+          }
+
           await omniChannelManager.processInboundMessage({
             channelAccountId: account.id,
             provider: "whatsapp_web",
@@ -189,7 +200,7 @@ export class WhatsAppWebAdapter implements ChannelProviderAdapter {
             direction: fromMe ? "out" : "in",
             text: msg.body || "",
             externalMessageId: msgIdStr,
-            mediaType: (msg.type as any) || "text",
+            mediaType,
             timestamp: msg.timestamp ? new Date(msg.timestamp * 1000) : new Date(),
           });
           processedCount++;
