@@ -40,6 +40,7 @@ export interface InboundMessagePayload {
   senderId: string;
   senderName: string;
   senderPhone?: string;
+  direction?: "in" | "out";
   text?: string;
   externalMessageId?: string;
   mediaUrl?: string;

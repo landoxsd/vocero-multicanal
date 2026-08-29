@@ -107,6 +107,7 @@ export class OmniChannelManager {
     }
 
     // 3. Buscar o crear la conversación
+    const isOutbound = payload.direction === "out";
     let convId: string;
     let convUnreadCount = 0;
     const [foundConv] = await db
@@ -121,9 +122,11 @@ export class OmniChannelManager {
       )
       .limit(1);
 
+    const msgTimestamp = payload.timestamp || new Date();
+
     if (!foundConv) {
       convId = newId("conversation");
-      convUnreadCount = 1;
+      convUnreadCount = isOutbound ? 0 : 1;
       await db.insert(schema.conversation).values({
         id: convId,
         organizationId: orgId,
@@ -131,29 +134,28 @@ export class OmniChannelManager {
         channelAccountId: channel.id,
         platform: payload.platform,
         aiEnabled: true,
-        unreadCount: 1,
-        lastInboundAt: new Date(),
-        lastMessageAt: new Date(),
+        unreadCount: convUnreadCount,
+        lastInboundAt: isOutbound ? null : msgTimestamp,
+        lastMessageAt: msgTimestamp,
       });
     } else {
       convId = foundConv.id;
-      convUnreadCount = (foundConv.unreadCount || 0) + 1;
+      convUnreadCount = isOutbound ? (foundConv.unreadCount || 0) : (foundConv.unreadCount || 0) + 1;
       await db
         .update(schema.conversation)
         .set({
           channelAccountId: channel.id,
           platform: payload.platform,
-          unreadCount: sql`${schema.conversation.unreadCount} + 1`,
-          lastInboundAt: new Date(),
-          lastMessageAt: new Date(),
+          unreadCount: isOutbound ? foundConv.unreadCount : sql`${schema.conversation.unreadCount} + 1`,
+          lastInboundAt: isOutbound ? foundConv.lastInboundAt : msgTimestamp,
+          lastMessageAt: msgTimestamp,
           updatedAt: new Date(),
         })
         .where(eq(schema.conversation.id, convId));
     }
 
-    // 4. Guardar el mensaje entrante
+    // 4. Guardar el mensaje (inbound u outbound)
     const messageId = newId("message");
-    const msgTimestamp = payload.timestamp || new Date();
     await db.insert(schema.message).values({
       id: messageId,
       organizationId: orgId,
@@ -165,7 +167,7 @@ export class OmniChannelManager {
         payload.provider === "whatsapp_web"
           ? payload.externalMessageId || `waw_${Date.now()}`
           : null,
-      direction: "in",
+      direction: isOutbound ? "out" : "in",
       type: payload.mediaType || "text",
       text: payload.text || "",
       status: "delivered",
@@ -199,19 +201,21 @@ export class OmniChannelManager {
           channelAccountId: channel.id,
           platform: payload.platform,
           unreadCount: convUnreadCount,
-          lastInboundAt: new Date().toISOString(),
-          lastMessageAt: new Date().toISOString(),
+          lastInboundAt: isOutbound ? undefined : msgTimestamp.toISOString(),
+          lastMessageAt: msgTimestamp.toISOString(),
         },
       },
     });
 
-    // 6. Actualizar actividad de lead y disparar IA
-    await onLeadActivity(orgId, contactId, msgTimestamp);
+    // 6. Actualizar actividad de lead y disparar IA (solo para mensajes entrantes)
+    if (!isOutbound) {
+      await onLeadActivity(orgId, contactId, msgTimestamp);
 
-    if (foundConv?.aiEnabled ?? true) {
-      maybeRunAgentTurn(convId).catch((err) => {
-        console.error("[OmniChannel] Error ejecutando turno de IA:", err);
-      });
+      if (foundConv?.aiEnabled ?? true) {
+        maybeRunAgentTurn(convId).catch((err) => {
+          console.error("[OmniChannel] Error ejecutando turno de IA:", err);
+        });
+      }
     }
 
     return {

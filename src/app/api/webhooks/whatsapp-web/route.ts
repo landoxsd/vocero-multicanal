@@ -79,33 +79,38 @@ export async function POST(req: Request) {
       return NextResponse.json({ status: "disconnected" });
     }
 
-    // 4. Manejo de Mensaje Entrante
+    // 4. Manejo de Mensaje (Entrante o Saliente)
     if (event === "message" || event === "message_create") {
-      const from = payload?.from || body.from;
-      const text = payload?.body || payload?.text || body.text || "";
-      const isFromMe = payload?.fromMe || body.fromMe || false;
+      const isFromMe = Boolean(payload?.fromMe || body.fromMe);
+      const targetJid = isFromMe
+        ? (payload?.to || body.to || "")
+        : (payload?.from || body.from || "");
 
-      // Ignorar mensajes salientes propios para evitar bucles
-      if (isFromMe) {
-        return NextResponse.json({ status: "ignored_from_me" });
+      // Ignorar estados/historias o mensajes sin destinatario
+      if (!targetJid || targetJid === "status@broadcast" || targetJid === "me") {
+        return NextResponse.json({ status: "ignored_broadcast_or_self" });
       }
 
-      // Normalizar número de teléfono
-      const rawPhone = from ? from.replace(/@.*$/, "") : "";
-      const senderName = payload?.notifyName || payload?._data?.notifyName || rawPhone;
+      const text = payload?.body || payload?.text || body.text || "";
+      const rawPhone = String(targetJid).replace(/@.*$/, "");
+      const senderName = isFromMe
+        ? (payload?.chatName || payload?.name || rawPhone)
+        : (payload?.notifyName || payload?._data?.notifyName || payload?.name || rawPhone);
 
       const result = await omniChannelManager.processInboundMessage({
         channelAccountId: channel.id,
         provider: "whatsapp_web",
         platform: "whatsapp",
-        senderId: from,
+        senderId: targetJid,
         senderName,
         senderPhone: rawPhone,
+        direction: isFromMe ? "out" : "in",
         text,
         externalMessageId: payload?.id?._serialized || payload?.id || `waw_${Date.now()}`,
         mediaUrl: payload?.mediaUrl,
         mediaType: payload?.type,
         metadata: payload,
+        timestamp: payload?.timestamp ? new Date(payload.timestamp * 1000) : new Date(),
       });
 
       return NextResponse.json({ status: "processed", ...result });

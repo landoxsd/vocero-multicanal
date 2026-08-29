@@ -392,8 +392,13 @@ class WhatsAppMultiManager {
         for (const chat of chats) {
             for (const msg of chat.messages) {
                 try {
+                    msg.chatName = chat.name || "";
+                    if (msg.fromMe) {
+                        msg.to = chat.chatId;
+                    } else {
+                        msg.from = chat.chatId;
+                    }
                     await this._sendWebhook(sessionObj, "message", msg);
-                    await this._sendWebhook(sessionObj, "message.any", msg);
                     sent++;
                 } catch (e) {
                     errors++;
