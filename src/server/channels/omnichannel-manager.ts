@@ -123,8 +123,37 @@ export class OmniChannelManager {
       contactId = foundContact.id;
     }
 
-    // 3. Buscar o crear la conversación
     const isOutbound = payload.direction === "out";
+    const msgTimestamp = payload.timestamp || new Date();
+
+    // 3. Idempotencia primero: el polling de WhatsApp Web puede reenviar el mismo
+    // mensaje; si ya existe, salir sin tocar unread ni timestamps de conversación.
+    const extId = payload.externalMessageId || `ext_${Date.now()}_${Math.random()}`;
+    if (payload.externalMessageId) {
+      const [existingMsg] = await db
+        .select({
+          id: schema.message.id,
+          conversationId: schema.message.conversationId,
+        })
+        .from(schema.message)
+        .where(
+          scoped(
+            schema.message.organizationId,
+            orgId,
+            eq(schema.message.externalMessageId, extId)
+          )
+        )
+        .limit(1);
+      if (existingMsg) {
+        return {
+          messageId: existingMsg.id,
+          conversationId: existingMsg.conversationId,
+          contactId,
+        };
+      }
+    }
+
+    // 4. Buscar o crear la conversación (solo para mensajes genuinamente nuevos)
     let convId: string;
     let convUnreadCount = 0;
     const [foundConv] = await db
@@ -139,8 +168,6 @@ export class OmniChannelManager {
         )
       )
       .limit(1);
-
-    const msgTimestamp = payload.timestamp || new Date();
 
     if (!foundConv) {
       convId = newId("conversation");
@@ -158,13 +185,17 @@ export class OmniChannelManager {
       });
     } else {
       convId = foundConv.id;
-      convUnreadCount = isOutbound ? (foundConv.unreadCount || 0) : (foundConv.unreadCount || 0) + 1;
+      convUnreadCount = isOutbound
+        ? (foundConv.unreadCount || 0)
+        : (foundConv.unreadCount || 0) + 1;
       await db
         .update(schema.conversation)
         .set({
           channelAccountId: channel.id,
           platform: payload.platform,
-          unreadCount: isOutbound ? foundConv.unreadCount : sql`${schema.conversation.unreadCount} + 1`,
+          unreadCount: isOutbound
+            ? foundConv.unreadCount
+            : sql`${schema.conversation.unreadCount} + 1`,
           lastInboundAt: isOutbound ? foundConv.lastInboundAt : msgTimestamp,
           lastMessageAt: msgTimestamp,
           updatedAt: new Date(),
@@ -178,24 +209,7 @@ export class OmniChannelManager {
         );
     }
 
-    // 4. Guardar el mensaje — idempotente por externalMessageId para evitar duplicados en polling
-    const extId = payload.externalMessageId || `ext_${Date.now()}_${Math.random()}`;
-    if (payload.externalMessageId) {
-      const [existingMsg] = await db
-        .select({ id: schema.message.id })
-        .from(schema.message)
-        .where(
-          scoped(
-            schema.message.organizationId,
-            orgId,
-            eq(schema.message.externalMessageId, extId)
-          )
-        )
-        .limit(1);
-      if (existingMsg) {
-        return { messageId: existingMsg.id, conversationId: convId, contactId };
-      }
-    }
+    // 5. Guardar el mensaje
 
     const messageId = newId("message");
     const meta = payload.metadata as Record<string, unknown> | undefined;
@@ -270,7 +284,7 @@ export class OmniChannelManager {
       )
       .limit(1);
 
-    // 5. Publicar eventos en SSE para actualización en vivo de la bandeja
+    // 6. Publicar eventos en SSE para actualización en vivo de la bandeja
     if (savedMsg) {
       publish(orgId, {
         type: "message.new",
@@ -296,7 +310,7 @@ export class OmniChannelManager {
       },
     });
 
-    // 6. Actualizar actividad de lead y disparar IA (solo para mensajes entrantes)
+    // 7. Actualizar actividad de lead y disparar IA (solo para mensajes entrantes)
     if (!isOutbound) {
       await onLeadActivity(orgId, contactId, msgTimestamp);
 

@@ -37,6 +37,7 @@ interface Channel {
 export default function ChannelsSettingsPage() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [activeModal, setActiveModal] = useState<
     "whatsapp_web" | "instagram" | "mercadolibre" | "facebook" | null
   >(null);
@@ -49,14 +50,19 @@ export default function ChannelsSettingsPage() {
 
   // Cargar canales
   const loadChannels = async () => {
+    setLoading(true);
+    setFetchError(null);
     try {
       const res = await fetch("/api/channels");
       if (res.ok) {
         const data = await res.json();
         setChannels(data.channels || []);
+      } else {
+        setFetchError("No se pudieron cargar los canales. Intenta de nuevo.");
       }
     } catch (e) {
       console.error("Error al cargar canales:", e);
+      setFetchError("Sin conexión con el servidor.");
     } finally {
       setLoading(false);
     }
@@ -268,6 +274,18 @@ export default function ChannelsSettingsPage() {
         {loading ? (
           <div className="p-8 text-center text-sm text-muted-foreground">
             Cargando canales...
+          </div>
+        ) : fetchError ? (
+          <div className="flex flex-col items-center gap-3 p-8 text-center">
+            <p className="text-sm font-medium text-rose-600 dark:text-rose-400">
+              {fetchError}
+            </p>
+            <button
+              onClick={() => void loadChannels()}
+              className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-muted"
+            >
+              <RefreshCw size={12} /> Reintentar
+            </button>
           </div>
         ) : channels.length === 0 ? (
           <div className="p-8 text-center text-sm text-muted-foreground">

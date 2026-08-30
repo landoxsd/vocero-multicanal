@@ -57,6 +57,24 @@ function EmptyState({ onSeeded }: { onSeeded: () => void }) {
   );
 }
 
+function FetchErrorState({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+      <p className="text-sm font-medium text-danger-text">No se pudo cargar la bandeja</p>
+      <p className="text-xs text-text-3">{message}</p>
+      <Button size="sm" variant="outline" onClick={onRetry}>
+        Reintentar
+      </Button>
+    </div>
+  );
+}
+
 const URGENCY_CLASS: Record<ReturnType<typeof waitingUrgency>, string> = {
   normal: "border-border bg-secondary text-text-2",
   warning: "border-warning-soft bg-warning-tint text-warning-text",
@@ -70,6 +88,8 @@ export function ConversationList({
   onSeeded,
   markReadOnOpen,
   onMarkReadOnOpenChange,
+  fetchError,
+  onRetry,
 }: {
   conversations: ConversationDto[] | null;
   selectedId: string | null;
@@ -77,6 +97,8 @@ export function ConversationList({
   onSeeded: () => void;
   markReadOnOpen: boolean;
   onMarkReadOnOpenChange: (value: boolean) => void;
+  fetchError?: string | null;
+  onRetry?: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "unread" | "waiting">("all");
@@ -112,7 +134,7 @@ export function ConversationList({
     if (typed) setQuery(typed);
   }, []);
 
-  const loading = conversationsProp === null;
+  const loading = conversationsProp === null && !fetchError;
   const conversations = conversationsProp ?? [];
   // Solo NOMBRE y TELÉFONO, como cualquier filtro de contactos. Antes también
   // miraba el preview, y como el agente nombra al dueño en sus propios
@@ -258,7 +280,12 @@ export function ConversationList({
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {loading ? (
+        {fetchError ? (
+          <FetchErrorState
+            message={fetchError}
+            onRetry={() => onRetry?.()}
+          />
+        ) : loading ? (
           <p className="p-6 text-center text-xs text-text-3">Cargando…</p>
         ) : conversations.length === 0 ? (
           <EmptyState onSeeded={onSeeded} />

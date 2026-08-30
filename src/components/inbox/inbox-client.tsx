@@ -40,6 +40,9 @@ export function InboxClient() {
   const [conversations, setConversations] = useState<ConversationDto[] | null>(
     null
   );
+  const [conversationsError, setConversationsError] = useState<string | null>(
+    null
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<MessageDto[]>([]);
   const [pending, setPending] = useState<PendingOut[]>([]);
@@ -85,9 +88,17 @@ export function InboxClient() {
 
   const refetchConversations = useCallback(async () => {
     const res = await fetch("/api/conversations").catch(() => null);
-    if (!res?.ok) return;
+    if (!res?.ok) {
+      setConversationsError(
+        res
+          ? "No se pudo cargar la bandeja. Revisa tu sesión o intenta de nuevo."
+          : "Sin conexión con el servidor."
+      );
+      return;
+    }
     const data = (await res.json()) as { conversations: ConversationDto[] };
     setConversations(data.conversations);
+    setConversationsError(null);
     lastFetchRef.current = new Date().toISOString();
   }, []);
 
@@ -310,6 +321,8 @@ export function InboxClient() {
           onSeeded={() => void refetchConversations()}
           markReadOnOpen={markReadOnOpen}
           onMarkReadOnOpenChange={updateMarkReadOnOpen}
+          fetchError={conversationsError}
+          onRetry={() => void refetchConversations()}
         />
       </section>
 

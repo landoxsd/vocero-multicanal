@@ -57,11 +57,16 @@ export function AppNav({
 
   async function refetchUnread() {
     const res = await fetch("/api/conversations").catch(() => null);
-    if (!res?.ok) return;
+    if (!res?.ok) {
+      setUnread(0);
+      return;
+    }
     const data = (await res.json()) as {
       conversations: { unreadCount: number }[];
     };
-    setUnread(data.conversations.reduce((a, c) => a + c.unreadCount, 0));
+    setUnread(
+      data.conversations.reduce((a, c) => a + Number(c.unreadCount || 0), 0)
+    );
   }
 
   useEffect(() => {
@@ -140,7 +145,7 @@ export function AppNav({
                     active ? "bg-brand text-brand-fg" : "bg-border-strong text-text-2"
                   )}
                 >
-                  {unread}
+                  {unread > 99 ? "99+" : unread}
                 </span>
               )}
             </Link>
