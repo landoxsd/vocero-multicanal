@@ -36,23 +36,42 @@ export const GET = withAuth(async (session) => {
 
   const waAdapter = new WhatsAppWebAdapter();
   for (const channel of channels) {
-    if (channel.provider === "whatsapp_web") {
-      const liveStatus = await waAdapter.getStatus(channel);
-      if (liveStatus === "connected" && channel.status !== "connected") {
-        await db
-          .update(schema.channelAccount)
-          .set({
-            status: "connected",
-            qrCode: null,
-            errorMessage: null,
-            lastConnectedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(schema.channelAccount.id, channel.id));
-        channel.status = "connected";
-        channel.qrCode = null;
-      }
+    if (channel.provider !== "whatsapp_web") continue;
+
+    const liveStatus = await waAdapter.getStatus(channel);
+    if (liveStatus === channel.status) continue;
+
+    const patch: {
+      status: typeof channel.status;
+      updatedAt: Date;
+      qrCode?: string | null;
+      errorMessage?: string | null;
+      lastConnectedAt?: Date;
+    } = { status: liveStatus, updatedAt: new Date() };
+
+    if (liveStatus === "connected") {
+      patch.qrCode = null;
+      patch.errorMessage = null;
+      patch.lastConnectedAt = new Date();
+    } else if (liveStatus === "scan_qr") {
+      patch.qrCode = (await waAdapter.getQrCode(channel)) ?? channel.qrCode;
+      patch.errorMessage = null;
+    } else if (liveStatus === "disconnected") {
+      patch.errorMessage =
+        channel.errorMessage ?? "Sesión de WhatsApp Web desconectada";
+    } else if (liveStatus === "connecting") {
+      patch.errorMessage = null;
     }
+
+    await db
+      .update(schema.channelAccount)
+      .set(patch)
+      .where(eq(schema.channelAccount.id, channel.id));
+
+    channel.status = liveStatus;
+    if (patch.qrCode !== undefined) channel.qrCode = patch.qrCode;
+    if (patch.errorMessage !== undefined) channel.errorMessage = patch.errorMessage;
+    if (patch.lastConnectedAt) channel.lastConnectedAt = patch.lastConnectedAt;
   }
 
   return Response.json({ channels });
