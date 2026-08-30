@@ -26,7 +26,8 @@ import { StartConversation } from "./start-conversation";
 
 export function ContactsClient() {
   const router = useRouter();
-  const [contacts, setContacts] = useState<ContactDto[]>([]);
+  const [contacts, setContacts] = useState<ContactDto[] | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [stage, setStage] = useState("all");
   const [stages, setStages] = useState<string[]>([]);
@@ -58,8 +59,16 @@ export function ContactsClient() {
     if (stage !== "all") params.set("stage", stage);
     if (showArchived) params.set("archived", "true");
     const res = await fetch(`/api/contacts?${params}`).catch(() => null);
-    if (!res?.ok) return;
+    if (!res?.ok) {
+      setFetchError(
+        res
+          ? "No se pudieron cargar los contactos. Revisa tu sesión o intenta de nuevo."
+          : "Sin conexión con el servidor."
+      );
+      return;
+    }
     const data = (await res.json()) as { contacts: ContactDto[] };
+    setFetchError(null);
     // A quién llamar primero: alta arriba, sin prioridad al final. El orden lo
     // decide esta lista, no el servidor, porque es una preferencia de trabajo y
     // no un dato del contacto.
@@ -134,7 +143,21 @@ export function ContactsClient() {
       </header>
 
       <div className="flex-1 overflow-y-auto p-4 sm:p-6">
-        {contacts.length === 0 ? (
+        {fetchError ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+            <p className="text-sm font-medium text-danger-text">
+              No se pudieron cargar los contactos
+            </p>
+            <p className="max-w-sm text-xs text-muted-foreground">{fetchError}</p>
+            <Button size="sm" variant="outline" onClick={() => void refetch()}>
+              Reintentar
+            </Button>
+          </div>
+        ) : contacts === null ? (
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+            Cargando…
+          </div>
+        ) : contacts.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
             {query.trim() || stage !== "all" ? (
               <>
