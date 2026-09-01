@@ -21,6 +21,18 @@ function getManagerPublicUrl() {
     ).replace(/\/$/, "");
 }
 
+/** Reconstruye { fromMe, remote, id } desde id serializado de WA Web (p. ej. @lid). */
+function parseSerializedWaMessageId(serialized) {
+    if (!serialized || typeof serialized !== "string") return null;
+    const parts = serialized.split("_");
+    if (parts.length < 3) return null;
+    const fromMe = parts[0] === "true";
+    const id = parts[parts.length - 1];
+    const remote = parts.slice(1, -1).join("_");
+    if (!id || !remote) return null;
+    return { fromMe, remote, id, _serialized: serialized, $1: serialized };
+}
+
 function findSystemBrowserPath() {
     if (process.env.PUPPETEER_EXECUTABLE_PATH && fs.existsSync(process.env.PUPPETEER_EXECUTABLE_PATH)) {
         console.log(`🌐 Chromium de entorno detectado: ${process.env.PUPPETEER_EXECUTABLE_PATH}`);
@@ -57,6 +69,9 @@ class WhatsAppMultiManager {
             "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1014583151-alpha.html";
 
         this.sessions = new Map();
+        /** @type {Map<string, { media: object, expiresAt: number }>} */
+        this.mediaCache = new Map();
+        this.mediaCacheTtlMs = Number(process.env.WA_MEDIA_CACHE_TTL_MS || "3600000");
         this.reconnectMaxAttempts = Number(process.env.WA_RECONNECT_MAX_ATTEMPTS || "12");
 
         this.onStatusChange = null;
@@ -246,8 +261,11 @@ class WhatsAppMultiManager {
 
                 const msgIdStr = msg.id ? (msg.id._serialized || msg.id.$1 || msg.id) : null;
                 const hasMedia = !!(msg.hasMedia || msg.type === "ptt" || msg.type === "audio" || msg.type === "image" || msg.type === "video" || msg.type === "sticker" || msg.type === "document");
+                if (hasMedia && msgIdStr) {
+                    void this._prefetchMedia(sessionId, msg, msgIdStr);
+                }
                 const mediaUrl = (hasMedia && msgIdStr)
-                    ? `${getManagerPublicUrl()}/api/media/${msgIdStr}`
+                    ? `${getManagerPublicUrl()}/api/media/${encodeURIComponent(msgIdStr)}`
                     : null;
                 const mimetype = msg.mimetype || (msg.type === "ptt" || msg.type === "audio" ? "audio/ogg; codecs=opus" : (msg.type === "image" ? "image/jpeg" : null));
 
@@ -520,10 +538,45 @@ class WhatsAppMultiManager {
         return { chats: chats.length, sent, errors };
     }
 
+    _getCachedMedia(msgIdStr) {
+        const entry = this.mediaCache.get(msgIdStr);
+        if (!entry) return null;
+        if (Date.now() > entry.expiresAt) {
+            this.mediaCache.delete(msgIdStr);
+            return null;
+        }
+        return entry.media;
+    }
+
+    _setCachedMedia(msgIdStr, media) {
+        if (!msgIdStr || !media?.data) return;
+        this.mediaCache.set(msgIdStr, {
+            media,
+            expiresAt: Date.now() + this.mediaCacheTtlMs,
+        });
+    }
+
+    async _prefetchMedia(sessionId, nativeMsg, msgIdStr) {
+        if (this._getCachedMedia(msgIdStr)) return;
+        try {
+            const media = await this.downloadMedia(sessionId, nativeMsg);
+            if (media?.data) {
+                this._setCachedMedia(msgIdStr, media);
+                console.log(`📥 [${sessionId}] Media precargada en caché: ${msgIdStr}`);
+            }
+        } catch (err) {
+            console.warn(
+                `⚠️ [${sessionId}] Prefetch media falló para ${msgIdStr}:`,
+                err.message
+            );
+        }
+    }
+
     _normalizeDownloadInput(msg) {
         if (typeof msg === "string") {
+            const parsed = parseSerializedWaMessageId(msg);
             return {
-                msgIdObj: { _serialized: msg, $1: msg },
+                msgIdObj: parsed || { _serialized: msg, $1: msg },
                 msgIdStr: msg,
                 nativeMsg: null,
             };
@@ -565,6 +618,12 @@ class WhatsAppMultiManager {
 
         const { msgIdObj, msgIdStr, nativeMsg } = this._normalizeDownloadInput(msg);
         if (!msgIdStr) return null;
+
+        const cached = this._getCachedMedia(msgIdStr);
+        if (cached) {
+            console.log(`📦 [${sessionId}] Media desde caché para ${msgIdStr}`);
+            return cached;
+        }
 
         let media = null;
 
@@ -637,7 +696,10 @@ class WhatsAppMultiManager {
 
                         if (!message) {
                             message = Msg.getModelsArray().find(
-                                (m) => m.id && m.id._serialized === msgIdStr
+                                (m) =>
+                                    m.id &&
+                                    (m.id._serialized === msgIdStr ||
+                                        m.id.$1 === msgIdStr)
                             );
                         }
                         if (!message) {
@@ -739,6 +801,10 @@ class WhatsAppMultiManager {
                     err.message
                 );
             }
+        }
+
+        if (media?.data) {
+            this._setCachedMedia(msgIdStr, media);
         }
 
         return media;

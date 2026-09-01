@@ -169,8 +169,12 @@ export async function processWaWebEvent(
 
     const extId = payload?.id;
     const externalMessageId =
-      (typeof extId === "object" && extId !== null && "_serialized" in extId
-        ? String((extId as { _serialized?: string })._serialized)
+      (typeof extId === "object" && extId !== null
+        ? String(
+            (extId as { _serialized?: string; $1?: string })._serialized ||
+              (extId as { $1?: string }).$1 ||
+              ""
+          ) || null
         : typeof extId === "string"
           ? extId
           : null) || `waw_${Date.now()}`;
