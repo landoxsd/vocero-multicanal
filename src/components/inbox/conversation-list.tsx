@@ -349,7 +349,7 @@ export function ConversationList({
                         </span>
                         {unread && (
                           <span className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-brand px-1.5 text-[10.5px] font-semibold text-brand-fg">
-                            {c.unreadCount}
+                            {c.unreadCount > 99 ? "99+" : c.unreadCount}
                           </span>
                         )}
                       </span>

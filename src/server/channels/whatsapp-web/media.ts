@@ -66,11 +66,23 @@ export async function downloadWaWebMedia(
   waMessageId: string
 ): Promise<{ data: Buffer; mimeType: string | null }> {
   const encoded = encodeURIComponent(waMessageId);
-  const res = await fetch(`${managerUrl()}/api/media/${encoded}`, {
-    headers: managerHeaders(),
-  }).catch(() => null);
-  if (!res?.ok) {
-    throw new Error(`Manager respondió ${res?.status ?? "sin conexión"}`);
+  const url = `${managerUrl()}/api/media/${encoded}`;
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: managerHeaders() });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.warn(`[wa-web/media] sin conexión con manager GET ${url}: ${reason}`);
+    throw new Error(`Manager sin conexión (${reason})`);
+  }
+  if (!res.ok) {
+    const bodySnippet = (await res.text().catch(() => "")).slice(0, 200);
+    console.warn(
+      `[wa-web/media] GET ${url} → HTTP ${res.status}${
+        bodySnippet ? ` — ${bodySnippet}` : ""
+      }`
+    );
+    throw new Error(`Manager respondió ${res.status}`);
   }
   const mimeType = res.headers.get("content-type");
   const data = Buffer.from(await res.arrayBuffer());
@@ -202,12 +214,34 @@ export async function ensureWaWebAssetAvailable(
   }
 }
 
-/** Mensajes viejos sin adjunto: intenta crear el asset al listar el hilo. */
+/** True si el mensaje WA Web aún necesita descarga o reintento de adjunto. */
+export function needsWaWebMediaBackfill(
+  message: Pick<typeof schema.message.$inferSelect, "type" | "channelAccountId">,
+  media: Pick<typeof schema.mediaAsset.$inferSelect, "fetchStatus"> | null
+): boolean {
+  if (!message.channelAccountId) return false;
+  const kind = normalizeWaWebMediaKind(message.type);
+  if (!kind) return false;
+  if (!media) return true;
+  return media.fetchStatus === "failed" || media.fetchStatus === "pending";
+}
+
+/** Mensajes sin adjunto o con fetch fallido: reintenta al listar el hilo. */
 export async function backfillWaWebMedia(
   organizationId: string,
-  message: typeof schema.message.$inferSelect
+  message: typeof schema.message.$inferSelect,
+  existingMedia: typeof schema.mediaAsset.$inferSelect | null = null
 ): Promise<typeof schema.mediaAsset.$inferSelect | null> {
-  if (message.mediaAssetId) return null;
+  if (
+    existingMedia &&
+    (existingMedia.fetchStatus === "failed" ||
+      existingMedia.fetchStatus === "pending") &&
+    isWaWebMediaPayload(existingMedia.payload)
+  ) {
+    return ensureWaWebAssetAvailable(organizationId, existingMedia.id);
+  }
+
+  if (message.mediaAssetId || existingMedia) return null;
   const waId = message.externalMessageId || message.waMessageId;
   if (!waId) return null;
 
