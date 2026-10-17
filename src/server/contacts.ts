@@ -7,16 +7,19 @@ import type { FichaDto, PriorityValue } from "@/lib/types";
 export function serializeContact(
   c: typeof schema.contact.$inferSelect,
   stageName: string | null = null,
-  priority: PriorityValue | null = null
+  priority: PriorityValue | null = null,
+  /** 018: si llegó por un anuncio, la fuente no capturada se deduce "anuncio". */
+  llegoPorAnuncio = false
 ) {
   return {
     id: c.id,
     name: c.name,
     phone: c.phone,
     notes: c.notes,
+    aiPaused: c.aiPaused,
     stageName,
     archivedAt: c.archivedAt?.toISOString() ?? null,
-    source: effectiveSource(c.source),
+    source: effectiveSource(c.source, llegoPorAnuncio),
     priority,
     // Viaja siempre, aunque esté vacía: la pantalla necesita distinguir "aún
     // no la han llenado" de "este contacto no la trae".

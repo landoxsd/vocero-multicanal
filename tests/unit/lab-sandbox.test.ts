@@ -20,6 +20,14 @@ vi.mock("@/lib/ai", () => ({
   }),
 }));
 
+// #85 — la resolución del proveedor mira primero la fila de Ajustes → IA. Sin
+// fila cae al entorno (`OPENROUTER_API_TOKEN`, abajo), sin tocar la cola de
+// selects de la BD simulada.
+vi.mock("@/server/ai/credentials", () => ({
+  getAiCredentialPublic: async () => null,
+  getAiCredentialSecret: async () => null,
+}));
+
 // BD simulada: cola de resultados de select + capturas de insert/update.
 const selectQueue: unknown[][] = [];
 const inserts: { table: unknown; values: unknown }[] = [];

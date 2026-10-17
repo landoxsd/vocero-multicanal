@@ -2,10 +2,15 @@
 
 ## Adaptador LLM (frontera única)
 
-`lib/ai`: cliente `fetch` OpenRouter-compatible. Env: `OPENROUTER_API_TOKEN` (opcional —
-sin él, agente/Laboratorio deshabilitados con estado vacío), `OPENROUTER_BASE_URL`
-(default `https://openrouter.ai/api`), `OPENROUTER_MODEL`, `OPENROUTER_JUDGE_MODEL`
-(default = `OPENROUTER_MODEL`). API: `chatJson<T>(schema, messages, opts)` → parsea con
+`lib/ai`: cliente `fetch` OpenRouter-compatible. Con quién habla lo resuelve
+`lib/ai/provider.ts` (#85): primero la fila `ai_credentials` de la organización
+(Ajustes → IA: base URL, modelo y llave cifrada; una fila pausada por 401/402 del
+proveedor NO cae al entorno) y, sin fila, el entorno: `OPENROUTER_API_TOKEN`
+(opcional — sin nada, agente/Laboratorio deshabilitados con estado vacío),
+`OPENROUTER_BASE_URL` (default `https://openrouter.ai/api`), `OPENROUTER_MODEL`,
+`OPENROUTER_JUDGE_MODEL` (default = `OPENROUTER_MODEL`; con fila, el juez usa el
+modelo de la fila). API: `chatJson<T>(schema, messages, opts)` (`opts.organizationId`
+elige la fila) → parsea con
 extracción robusta (bloque ```json, primer `{...}` balanceado), valida con Zod,
 reintenta ante fallo de red/parseo/validación (2 reintentos, backoff corto). Un hipo del
 proveedor NUNCA propaga excepción al turno: agota reintentos → resultado `error` tipado.

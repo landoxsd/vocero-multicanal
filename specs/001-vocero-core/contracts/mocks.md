@@ -42,6 +42,11 @@ Intercepción: `META_GRAPH_BASE_URL` apunta a `http://localhost:3000/api/dev/wa-
 - Intención de compra ("lo compro", "quiero comprar", persona compradora) →
   `{"action":"move_stage","stage":"Interesado","reply":"..."}`.
 - Cualquier otro caso → `{"action":"reply","text":"Respuesta de prueba sobre: <eco>"}`.
+- `GET /api/dev/ai-mock/v1/models` → `{ data: [{ id: "mock/agente", name }, { id: "mock/juez", name }] }`
+  (#85, para «Traer modelos» de Ajustes → IA).
+- Llave con sufijo `-invalid` → 401 y con `-sin-saldo` → 402, en ambas rutas (#85):
+  ejercitan la pausa del proveedor de IA sin un proveedor real. Cualquier otra
+  llave se acepta.
 
 Respuesta con shape OpenRouter: `{ choices: [{ message: { content: "<json>" } }] }`.
 El ai-mock NUNCA es fallback en runtime: solo se usa si `OPENROUTER_BASE_URL` apunta a

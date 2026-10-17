@@ -1,1 +1,1 @@
-export { dynamic, POST } from "../../v1/chat/completions/route";
+export { dynamic, GET, POST } from "../../v1/chat/completions/route";

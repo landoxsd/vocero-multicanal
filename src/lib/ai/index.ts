@@ -1,11 +1,20 @@
 import type { z } from "zod";
-import { getEnv, isAiConfigured } from "@/lib/env";
+import { chatCompletionsUrl } from "@/lib/ai/presets";
+import {
+  resolveAiProvider,
+  type AiProvider,
+  type EstadoIa,
+} from "@/lib/ai/provider";
+import { marcarEstadoPorRespuesta } from "@/server/ai/credentials";
 
 /**
  * Adaptador LLM OpenRouter-compatible — ÚNICA frontera con el proveedor de IA
  * (Constitución II). Regla operativa: la salida del modelo es impredecible;
  * todo consumo pasa por extracción robusta + Zod + reintentos, y un hipo del
  * proveedor jamás propaga excepción (resultado `error` tipado).
+ *
+ * Con quién habla lo decide `lib/ai/provider.ts`: la fila de Ajustes → IA de
+ * la organización, y si no hay, las variables `OPENROUTER_*` del entorno.
  */
 
 export type ChatMessage = {
@@ -20,32 +29,47 @@ export type ChatJsonResult<T> =
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 500;
 
+/** El proveedor contestó con un código HTTP de error. */
+export class ProviderHttpError extends Error {
+  constructor(
+    readonly status: number,
+    body: string
+  ) {
+    super(`proveedor respondió ${status}: ${truncate(body)}`);
+    this.name = "ProviderHttpError";
+  }
+}
+
 export async function chatJson<T>(
   schema: z.ZodType<T>,
   messages: ChatMessage[],
-  opts?: { model?: string; judge?: boolean; timeoutMs?: number }
+  opts?: {
+    model?: string;
+    judge?: boolean;
+    timeoutMs?: number;
+    /**
+     * De quién es la configuración con la que se paga esta llamada. Sin ella
+     * solo cuenta el entorno: no hay fila que consultar ni que pausar.
+     */
+    organizationId?: string;
+  }
 ): Promise<ChatJsonResult<T>> {
-  if (!isAiConfigured()) {
+  const resolved = await resolveAiProvider(opts?.organizationId);
+  if (!resolved.ok) {
     return {
       ok: false,
       error: "not_configured",
-      detail: "Sin proveedor de IA configurado (GEMINI_API_KEY u OPENROUTER_API_TOKEN)",
+      detail: detalleNoConfigurado(resolved.estado),
     };
   }
-  const env = getEnv();
-  const defaultModel = env.GEMINI_API_KEY
-    ? env.GEMINI_MODEL
-    : env.OPENROUTER_MODEL || "google/gemini-flash-1.5";
+  const provider = resolved.provider;
   const model =
-    opts?.model ??
-    (opts?.judge
-      ? (env.OPENROUTER_JUDGE_MODEL ?? env.OPENROUTER_MODEL ?? defaultModel)
-      : defaultModel);
+    opts?.model ?? (opts?.judge ? provider.judgeModel : provider.model);
   if (!model?.trim()) {
     return {
       ok: false,
       error: "not_configured",
-      detail: "Sin modelo de IA configurado",
+      detail: "Sin modelo configurado (Ajustes → IA u OPENROUTER_MODEL / GEMINI_MODEL)",
     };
   }
 
@@ -63,7 +87,12 @@ export async function chatJson<T>(
             },
           ];
     try {
-      const raw = await callProvider(model, attemptMessages, opts?.timeoutMs);
+      const raw = await callProvider(
+        provider,
+        model,
+        attemptMessages,
+        opts?.timeoutMs
+      );
       const extracted = extractJson(raw);
       if (extracted === null) {
         lastDetail = `sin JSON extraíble (raw=${truncate(raw)})`;
@@ -79,6 +108,28 @@ export async function chatJson<T>(
       return { ok: true, data: parsed.data, raw };
     } catch (err) {
       lastDetail = err instanceof Error ? err.message : String(err);
+      /**
+       * El estado de la credencial lo dicta QUIEN COBRA, no la UI.
+       *
+       * Si el proveedor dijo 401 o 402 sobre la llave guardada en Ajustes → IA,
+       * la credencial queda pausada y se deja de intentar: reintentar una
+       * llave que el proveedor rechaza solo gasta tiempo, y el turno ya está
+       * perdido. Un 429 o un 500 NO pausan (ver `estadoSegunRespuesta`), así
+       * que ahí sí se reintenta. La llave del entorno no tiene fila que
+       * pausar: ahí se reintenta como siempre.
+       */
+      if (
+        err instanceof ProviderHttpError &&
+        provider.source === "org" &&
+        opts?.organizationId
+      ) {
+        const pausada = await marcarEstadoPorRespuesta(
+          opts.organizationId,
+          err.status,
+          lastDetail
+        ).catch(() => false);
+        if (pausada) break;
+      }
       if (attempt < MAX_ATTEMPTS) {
         await sleep(RETRY_DELAY_MS * attempt);
       }
@@ -94,26 +145,32 @@ export async function chatJson<T>(
   };
 }
 
+function detalleNoConfigurado(estado: Exclude<EstadoIa, { activa: true }>): string {
+  switch (estado.motivo) {
+    case "sin_configurar":
+      return "Sin proveedor de IA: configúralo en Ajustes → IA (u OPENROUTER_API_TOKEN / GEMINI_API_KEY en el entorno)";
+    case "token_invalido":
+      return `La llave de IA (…${estado.last4}) está pausada: el proveedor la rechazó`;
+    case "sin_saldo":
+      return `La llave de IA (…${estado.last4}) está pausada: la cuenta no tiene saldo`;
+  }
+}
+
 async function callProvider(
+  provider: AiProvider,
   model: string,
   messages: ChatMessage[],
   timeoutMs = 60_000
 ): Promise<string> {
-  const env = getEnv();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  const useGemini = Boolean(env.GEMINI_API_KEY && !env.OPENROUTER_API_TOKEN);
-  const endpoint = useGemini
-    ? "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-    : `${env.OPENROUTER_BASE_URL}/v1/chat/completions`;
-  const token = useGemini ? env.GEMINI_API_KEY : env.OPENROUTER_API_TOKEN;
-
   try {
-    const res = await fetch(endpoint, {
+    const res = await fetch(chatCompletionsUrl(provider.baseUrl), {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
+        // El token jamás se loguea; solo viaja en este header.
+        Authorization: `Bearer ${provider.token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ model, messages }),
@@ -121,7 +178,7 @@ async function callProvider(
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(`proveedor respondió ${res.status}: ${truncate(text)}`);
+      throw new ProviderHttpError(res.status, text);
     }
     const json = (await res.json()) as {
       choices?: { message?: { content?: string } }[];

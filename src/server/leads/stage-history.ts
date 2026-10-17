@@ -3,6 +3,7 @@ import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import type { LossReason, StageChangeSource } from "@/lib/types";
+import { reportStageChange } from "@/server/attribution/conversions";
 
 /**
  * La ÚNICA puerta que escribe `lead.stage_id`.
@@ -54,7 +55,12 @@ export async function moveLeadToStage(input: MoveInput): Promise<MoveResult> {
   const db = getDb();
   const occurredAt = input.occurredAt ?? new Date();
 
-  return db.transaction(async (tx) => {
+  // 016: se anota aquí dentro y se reporta a Meta DESPUÉS del commit. Una
+  // llamada de red dentro de la transacción la mantendría abierta mientras
+  // Meta piensa, y una conversión jamás vale una transacción larga.
+  let toStageKind: "open" | "won" | "lost" | null = null;
+
+  const result = await db.transaction(async (tx) => {
     const leadRows = await tx
       .select({ lead: schema.lead, stage: schema.pipelineStage })
       .from(schema.lead)
@@ -90,6 +96,7 @@ export async function moveLeadToStage(input: MoveInput): Promise<MoveResult> {
     if (!target) return { ok: false as const, reason: "stage_not_found" as const };
 
     const changed = current.lead.stageId !== target.id;
+    toStageKind = target.kind;
 
     // El motivo se exige al ENTRAR a la etapa perdida. Reordenar una tarjeta
     // que ya estaba ahí no vuelve a preguntar.
@@ -139,6 +146,22 @@ export async function moveLeadToStage(input: MoveInput): Promise<MoveResult> {
 
     return { ok: true as const, lead: leadRow, changed };
   });
+
+  // 016 — Atribución: si esta instancia la tiene encendida, entrar a la etapa
+  // que el negocio marcó como "lead calificado" o a una etapa ganada se le
+  // reporta a Meta. Best-effort y ya fuera de la transacción: un fallo aquí
+  // jamás puede costar el movimiento del lead, que ya está en firme.
+  if (result.ok && result.changed && toStageKind !== null) {
+    await reportStageChange({
+      organizationId: input.organizationId,
+      leadId: result.lead.id,
+      contactId: result.lead.contactId,
+      toStageId: result.lead.stageId,
+      toStageKind,
+    });
+  }
+
+  return result;
 }
 
 /**

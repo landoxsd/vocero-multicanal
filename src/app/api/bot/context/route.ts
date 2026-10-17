@@ -3,17 +3,26 @@ import { getDb, schema } from "@/lib/db";
 import { apiError } from "@/lib/api";
 import { requireBotKey, resolveInstanceOrg } from "@/server/bot/auth";
 import { serializeFicha } from "@/server/bot/ficha";
+import { findContactByIdentity } from "@/server/inbox/identity";
 import { isWindowOpen, windowRemainingMs } from "@/server/inbox/window";
+import { windowMsFor } from "@/server/channels/capabilities";
+import { citasParaContexto } from "@/server/agenda/context";
 
 export const dynamic = "force-dynamic";
 
 /**
  * Contexto conversacional para un cerebro externo (solo lectura).
- * GET /api/bot/context?waIdentity=... | ?conversationId=...
+ * GET /api/bot/context?identity=... | ?waIdentity=... | ?conversationId=...
+ *
+ * `identity` es el nombre neutro (hay contactos que no son de WhatsApp).
+ * `waIdentity` se mantiene aceptado y presente en la respuesta porque es
+ * contrato publicado: hay cerebros externos en produccion que dependen de el.
+ * No tiene fecha de retiro.
  *
  * NO devuelve el historial de mensajes: el bot lleva su propia memoria de la
  * conversación. Lo que aquí sale es lo que solo el CRM sabe — quién es la
- * persona, si un humano tomó el control y si la ventana de 24 h sigue abierta.
+ * persona, si un humano tomó el control y si la ventana de 24 h sigue abierta
+ * (y, con la agenda encendida, qué citas tiene: `booking`).
  */
 export async function GET(req: Request) {
   const denied = requireBotKey(req);
@@ -25,10 +34,11 @@ export async function GET(req: Request) {
   }
 
   const url = new URL(req.url);
-  const waIdentity = url.searchParams.get("waIdentity");
+  const waIdentity =
+    url.searchParams.get("identity") ?? url.searchParams.get("waIdentity");
   const conversationId = url.searchParams.get("conversationId");
   if (!waIdentity && !conversationId) {
-    return apiError(422, "invalid", "Falta waIdentity o conversationId");
+    return apiError(422, "invalid", "Falta identity (o waIdentity) o conversationId");
   }
 
   const db = getDb();
@@ -54,17 +64,9 @@ export async function GET(req: Request) {
     contact = rows[0]?.contact;
     conversation = rows[0]?.conversation;
   } else if (waIdentity) {
-    const contacts = await db
-      .select()
-      .from(schema.contact)
-      .where(
-        and(
-          eq(schema.contact.organizationId, organizationId),
-          eq(schema.contact.waIdentity, waIdentity)
-        )
-      )
-      .limit(1);
-    contact = contacts[0];
+    // Exacta primero; si no, la reconciliación de la ingesta (R11): quien
+    // escribió con teléfono y ahora llega solo con BSUID es el mismo contacto.
+    contact = await findContactByIdentity(organizationId, waIdentity);
     if (contact) {
       // La conversación del Laboratorio jamás se resuelve por identidad: ese
       // camino es para el bot de producción, que nunca debe hablarle a un
@@ -88,26 +90,33 @@ export async function GET(req: Request) {
     return apiError(404, "not_found", "Conversación no encontrada");
   }
 
-  const leadRows = await db
-    .select({ lead: schema.lead, stage: schema.pipelineStage })
-    .from(schema.lead)
-    .innerJoin(
-      schema.pipelineStage,
-      eq(schema.lead.stageId, schema.pipelineStage.id)
-    )
-    .where(
-      and(
-        eq(schema.lead.organizationId, organizationId),
-        eq(schema.lead.contactId, contact.id)
+  const [leadRows, booking] = await Promise.all([
+    db
+      .select({ lead: schema.lead, stage: schema.pipelineStage })
+      .from(schema.lead)
+      .innerJoin(
+        schema.pipelineStage,
+        eq(schema.lead.stageId, schema.pipelineStage.id)
       )
-    )
-    .limit(1);
+      .where(
+        and(
+          eq(schema.lead.organizationId, organizationId),
+          eq(schema.lead.contactId, contact.id)
+        )
+      )
+      .limit(1),
+    citasParaContexto(organizationId, contact.id),
+  ]);
 
   return Response.json({
     contact: {
       id: contact.id,
       name: contact.name,
+      /** Nombre neutro (014). Preferir este en clientes nuevos. */
+      identity: contact.waIdentity,
+      /** Alias heredado: sigue aqui para no romper bots ya desplegados. */
       waIdentity: contact.waIdentity,
+      channel: contact.channel,
       phone: contact.phone,
       ficha: serializeFicha(contact),
     },
@@ -117,11 +126,26 @@ export async function GET(req: Request) {
       // aunque el flag siga en true.
       aiEnabled: conversation.aiEnabled && !conversation.handoffAt,
       handoffAt: conversation.handoffAt?.toISOString() ?? null,
-      windowOpen: isWindowOpen(conversation.lastInboundAt),
-      windowRemainingMs: windowRemainingMs(conversation.lastInboundAt),
+      // 022: la ventana es la del canal de la conversación.
+      windowOpen: isWindowOpen(
+        conversation.lastInboundAt,
+        new Date(),
+        windowMsFor(conversation.channel)
+      ),
+      windowRemainingMs: windowRemainingMs(
+        conversation.lastInboundAt,
+        new Date(),
+        windowMsFor(conversation.channel)
+      ),
     },
     lead: leadRows[0]
       ? { id: leadRows[0].lead.id, stageName: leadRows[0].stage.name }
       : null,
+    /**
+     * 015 — Las citas del contacto. FALTA con la agenda apagada (o si no se
+     * pudieron leer): un cerebro que no lo recibe no afirma nada sobre citas,
+     * y uno que no lo lee no cambia. Aditivo.
+     */
+    ...(booking ? { booking } : {}),
   });
 }

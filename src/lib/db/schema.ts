@@ -11,6 +11,15 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
+/**
+ * Tiempo: todas las columnas son `timestamp without time zone` y el marco es
+ * UTC. Drizzle lo respeta en ambas direcciones; `now()` de los `defaultNow()`
+ * solo lo respeta porque la conexión fija `TimeZone: "UTC"`
+ * (ver src/lib/db/index.ts). No cambies una columna a `timestamptz` de forma
+ * aislada: al leerla Drizzle seguiría añadiéndole "+0000" salvo que también
+ * lleve `{ withTimezone: true }`.
+ */
+
 /* ============================================================
  * Auth (Better Auth + plugin organization)
  * ============================================================ */
@@ -166,12 +175,40 @@ export const contact = pgTable(
      * Llave de resolución WhatsApp (003): teléfono normalizado (521→52) o
      * `bsuid:<id>` cuando Meta no manda wa_id. Estable de por vida.
      */
+    /**
+     * 014: canal por el que vive este contacto. Aditivo y con default: toda
+     * fila existente sigue significando exactamente lo mismo.
+     */
+    channel: text("channel", { enum: ["whatsapp", "instagram", "messenger", "tiktok"] })
+      .notNull()
+      .default("whatsapp"),
+    /**
+     * Llave de resolucion. WhatsApp: telefono normalizado (521 a 52) o
+     * `bsuid:<id>`. Instagram (014): `ig:<IGSID>`. Estable de por vida.
+     * El nombre `wa_identity` se conserva porque es contrato publicado:
+     * `/api/bot/context?waIdentity=...` lo recibe y lo devuelve, y hay
+     * cerebros externos que dependen de el.
+     */
     waIdentity: text("wa_identity").notNull(),
     /** Teléfono como ATRIBUTO opcional (003): falta en contactos BSUID. */
     phone: text("phone"),
     /** Business-Scoped User ID si se conoce (003). */
     waUserId: text("wa_user_id"),
     name: text("name").notNull(),
+    /**
+     * Quién puso este nombre.
+     *
+     * `perfil` = lo trajo WhatsApp y puede seguir actualizandose solo;
+     * `manual` = lo escribio una persona en el CRM y NADIE lo pisa.
+     *
+     * Existe porque las dos cosas se necesitan a la vez: un contacto que
+     * cambia su nombre de WhatsApp tiene que reflejarse (#51), y el operador
+     * que renombro a alguien como "Juan - obra Polanco" no puede perder ese
+     * trabajo con el siguiente mensaje.
+     */
+    nameSource: text("name_source", { enum: ["perfil", "manual"] })
+      .notNull()
+      .default("perfil"),
     notes: text("notes"),
     /**
      * Ficha de calificación que levanta un cerebro externo por
@@ -190,12 +227,29 @@ export const contact = pgTable(
     source: text("source", {
       enum: ["anuncio", "organico", "referido", "conocido", "otro"],
     }),
+    /**
+     * 027 — El agente no le responde a esta persona: clientes, miembros,
+     * proveedores — gente a la que el dueño quiere atender él mismo.
+     *
+     * Vive en el CONTACTO y no solo en la conversación porque un contacto
+     * importado todavía no tiene conversación (no se crean hilos vacíos), y
+     * porque al eliminar una conversación (026) la siguiente nacería con el
+     * agente encendido. La conversación lo hereda al crearse
+     * (`getOrCreateConversation`); después manda el interruptor de la Bandeja.
+     */
+    aiPaused: boolean("ai_paused").notNull().default(false),
     archivedAt: timestamp("archived_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex("contact_org_wa_identity_uq").on(t.organizationId, t.waIdentity),
+    // 014: el canal entra en la llave. Sin el, un IGSID que coincidiera con
+    // un telefono normalizado mezclaria dos personas en silencio.
+    uniqueIndex("contact_org_channel_identity_uq").on(
+      t.organizationId,
+      t.channel,
+      t.waIdentity
+    ),
     index("contact_org_wa_user_id_idx").on(t.organizationId, t.waUserId),
     index("contact_org_name_idx").on(t.organizationId, t.name),
   ]
@@ -365,6 +419,19 @@ export const conversation = pgTable(
       .default("whatsapp"),
     /** Conversación del Laboratorio: jamás toca la API de WhatsApp. */
     isTest: boolean("is_test").notNull().default(false),
+    /**
+     * 014: canal de la conversacion. Denormalizado del contacto a proposito:
+     * el ruteo de salida y el filtro de la bandeja lo leen en cada mensaje.
+     */
+    channel: text("channel", { enum: ["whatsapp", "instagram", "messenger", "tiktok"] })
+      .notNull()
+      .default("whatsapp"),
+    /**
+     * 014: identificador del hilo en la plataforma de origen. Zernio entrega
+     * un conversationId opaco ("no asumas su formato") que hace falta para
+     * responder; WhatsApp no lo necesita y queda null.
+     */
+    channelThreadRef: text("channel_thread_ref"),
     aiEnabled: boolean("ai_enabled").notNull().default(true),
     handoffAt: timestamp("handoff_at"),
     handoffReason: text("handoff_reason", {
@@ -530,6 +597,150 @@ export const metaCredentials = pgTable(
   ]
 );
 
+/**
+ * 014 - Credenciales del canal de Instagram. Tabla explicita (no un jsonb
+ * generico) porque unas credenciales tienen forma fija y conocida: asi
+ * conservan tipado e indices. El token se cifra con los mismos helpers que el
+ * de WhatsApp; un segundo mecanismo de cifrado seria un segundo mecanismo que
+ * auditar.
+ */
+export const instagramCredentials = pgTable(
+  "instagram_credentials",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    /** De donde vienen los mensajes: API unificada o app propia de Meta. */
+    source: text("source", { enum: ["zernio", "meta"] }).notNull(),
+    /** IG_ID del perfil profesional: por el enruta el webhook. */
+    igUserId: text("ig_user_id").notNull(),
+    /** Zernio: accountId de la cuenta conectada. Meta directo: null. */
+    accountRef: text("account_ref"),
+    username: text("username"),
+    tokenCipher: text("token_cipher").notNull(),
+    tokenIv: text("token_iv").notNull(),
+    tokenTag: text("token_tag").notNull(),
+    /**
+     * 030 — Obsoleta: el secreto iba en claro. Nada la escribe; el arranque
+     * la cifra en las columnas de abajo y la deja en nulo. Se quita en una
+     * versión mayor (spec 030, D6).
+     */
+    webhookSecret: text("webhook_secret"),
+    /** 030 — Secreto HMAC de las entregas de Zernio, cifrado como el token. */
+    webhookSecretCipher: text("webhook_secret_cipher"),
+    webhookSecretIv: text("webhook_secret_iv"),
+    webhookSecretTag: text("webhook_secret_tag"),
+    status: text("status", { enum: ["connected", "reconnect_required"] })
+      .notNull()
+      .default("connected"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("instagram_credentials_org_uq").on(t.organizationId),
+    uniqueIndex("instagram_credentials_ig_user_uq").on(t.igUserId),
+    index("instagram_credentials_account_ref_idx").on(t.accountRef),
+  ]
+);
+
+/**
+ * 017 — Credenciales del canal de Messenger: la página de Facebook y su token
+ * de acceso, cifrado con el mismo AES-256-GCM que los demás. Tabla propia y
+ * explícita, como la de Instagram: unas credenciales tienen forma fija y
+ * conocida, y esconderlas en un jsonb perdería el tipado y los índices.
+ */
+export const messengerCredentials = pgTable(
+  "messenger_credentials",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    /** De donde vienen los mensajes: API unificada o app propia de Meta. */
+    source: text("source", { enum: ["zernio", "meta"] })
+      .notNull()
+      .default("meta"),
+    /**
+     * ID de la página de Facebook: por él enruta el webhook de Meta
+     * (`entry[].id`). En modo Zernio puede no conocerse — ahí enruta
+     * `account_ref` — así que es opcional.
+     */
+    pageId: text("page_id"),
+    pageName: text("page_name"),
+    /** Zernio: accountId de la cuenta conectada. Meta directo: null. */
+    accountRef: text("account_ref"),
+    tokenCipher: text("token_cipher").notNull(),
+    tokenIv: text("token_iv").notNull(),
+    tokenTag: text("token_tag").notNull(),
+    /**
+     * 030 — Obsoleta: el secreto iba en claro. Nada la escribe; el arranque
+     * la cifra en las columnas de abajo y la deja en nulo. Se quita en una
+     * versión mayor (spec 030, D6).
+     */
+    webhookSecret: text("webhook_secret"),
+    /** 030 — Secreto HMAC de las entregas de Zernio, cifrado como el token. */
+    webhookSecretCipher: text("webhook_secret_cipher"),
+    webhookSecretIv: text("webhook_secret_iv"),
+    webhookSecretTag: text("webhook_secret_tag"),
+    status: text("status", { enum: ["connected", "reconnect_required"] })
+      .notNull()
+      .default("connected"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("messenger_credentials_org_uq").on(t.organizationId),
+    uniqueIndex("messenger_credentials_page_uq").on(t.pageId),
+    index("messenger_credentials_account_ref_idx").on(t.accountRef),
+  ]
+);
+
+/**
+ * 022 — Credenciales del canal de TikTok.
+ *
+ * TikTok no abre su API de mensajes a una app propia como hace Meta: llega por
+ * la API unificada de Zernio. `source` existe, con un solo valor, para que una
+ * fuente futura no pida otra migración (mismo patrón que
+ * `messenger_credentials`).
+ */
+export const tiktokCredentials = pgTable(
+  "tiktok_credentials",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    source: text("source", { enum: ["zernio"] }).notNull().default("zernio"),
+    /** `accountId` de la cuenta en Zernio: por él enruta el webhook. */
+    accountRef: text("account_ref").notNull(),
+    /** Usuario de TikTok, solo para enseñarlo en Ajustes. */
+    username: text("username"),
+    tokenCipher: text("token_cipher").notNull(),
+    tokenIv: text("token_iv").notNull(),
+    tokenTag: text("token_tag").notNull(),
+    /**
+     * 030 — Obsoleta: el secreto iba en claro. Nada la escribe; el arranque
+     * la cifra en las columnas de abajo y la deja en nulo. Se quita en una
+     * versión mayor (spec 030, D6).
+     */
+    webhookSecret: text("webhook_secret"),
+    /** 030 — Secreto HMAC de las entregas de Zernio, cifrado como el token. */
+    webhookSecretCipher: text("webhook_secret_cipher"),
+    webhookSecretIv: text("webhook_secret_iv"),
+    webhookSecretTag: text("webhook_secret_tag"),
+    status: text("status", { enum: ["connected", "reconnect_required"] })
+      .notNull()
+      .default("connected"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("tiktok_credentials_org_uq").on(t.organizationId),
+    uniqueIndex("tiktok_credentials_account_ref_uq").on(t.accountRef),
+  ]
+);
+
 export const agentProfile = pgTable(
   "agent_profile",
   {
@@ -620,6 +831,203 @@ export const agentTestRun = pgTable(
   ]
 );
 
+/* ============================================================
+ * 015 — Motor de agenda (detrás de la bandera AGENDA)
+ *
+ * Las tablas se crean SIEMPRE, encendida o apagada la bandera: una tabla
+ * vacía es inerte, y a cambio todas las instancias del mundo comparten la
+ * misma estructura y la misma cadena de migraciones (ADR-001).
+ * ============================================================ */
+
+/** Configuración de la agenda del negocio: una fila por organización. */
+export const calendarSettings = pgTable(
+  "calendar_settings",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    /** `{"mon":[{"start":"09:00","end":"18:00"}]}` — hora de PARED, no UTC. */
+    weeklyHours: jsonb("weekly_hours").notNull(),
+    slotMinutes: integer("slot_minutes").notNull().default(30),
+    bufferMinutes: integer("buffer_minutes").notNull().default(0),
+    minNoticeHours: integer("min_notice_hours").notNull().default(2),
+    maxDaysAhead: integer("max_days_ahead").notNull().default(7),
+    timezone: text("timezone").notNull().default("America/Mexico_City"),
+    /**
+     * Cómo se entrega la reunión. `enlace-fijo` no habla con nadie: es el
+     * default y la razón de que encender la agenda no exija terceros.
+     * Un fork agrega el suyo al catálogo del código sin tocar esta columna.
+     */
+    connector: text("connector").notNull().default("enlace-fijo"),
+    /** Sala fija del conector `enlace-fijo`; null ⇒ citas sin link. */
+    meetingLink: text("meeting_link"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("calendar_settings_org_uq").on(t.organizationId)]
+);
+
+/**
+ * La cita. Una sola tabla para sesiones y bloqueos manuales: un bloqueo es
+ * una cita sin contacto que ocupa agenda igual.
+ */
+export const booking = pgTable(
+  "booking",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["session", "block"] })
+      .notNull()
+      .default("session"),
+    status: text("status", {
+      enum: ["agendada", "realizada", "no_show", "cancelada"],
+    })
+      .notNull()
+      .default("agendada"),
+    source: text("source", { enum: ["manual", "ai"] })
+      .notNull()
+      .default("manual"),
+    contactId: text("contact_id").references(() => contact.id, {
+      onDelete: "cascade",
+    }),
+    conversationId: text("conversation_id").references(() => conversation.id, {
+      onDelete: "set null",
+    }),
+    leadId: text("lead_id").references(() => lead.id, { onDelete: "set null" }),
+    /** Instante UTC. El horario semanal es de pared; esto ya está resuelto. */
+    scheduledAt: timestamp("scheduled_at").notNull(),
+    /** Capturada al crear: cambiar la configuración no reescribe el pasado. */
+    durationMinutes: integer("duration_minutes").notNull(),
+    /**
+     * Con qué conector nació la ENTREGA. Reprogramar y cancelar hablan con
+     * ESTE, no con el activo: si el negocio cambia de proveedor, las citas ya
+     * confirmadas siguen viviendo donde se crearon.
+     */
+    connector: text("connector"),
+    /** Id de la reunión/evento en el proveedor; null en `enlace-fijo`. */
+    externalRef: text("external_ref"),
+    /**
+     * El link que se le dio al cliente. Se COPIA, no se lee de la
+     * configuración: la cita es un hecho histórico, no una vista del presente.
+     */
+    meetingLink: text("meeting_link"),
+    /**
+     * El proveedor falló al crear la reunión. La cita existe igual —un tercero
+     * caído no cuesta la conversión— y el operador reintenta desde "Citas".
+     */
+    linkPending: boolean("link_pending").notNull().default(false),
+    /** Conversación del Laboratorio: jamás llama a un conector real. */
+    isTest: boolean("is_test").notNull().default(false),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("booking_org_when_idx").on(t.organizationId, t.scheduledAt),
+    index("booking_org_status_idx").on(t.organizationId, t.status),
+    /**
+     * Anti doble-booking ATÓMICO. La re-validación al confirmar deja una
+     * ventana entre leer y escribir; esto la cierra en la BASE: dos
+     * confirmaciones simultáneas del mismo instante no pueden ganar las dos, y
+     * la perdedora recibe un 23505 que el servicio traduce a `slot_taken` con
+     * alternativas frescas. Las citas de prueba quedan fuera: no consumen la
+     * agenda real.
+     */
+    uniqueIndex("booking_org_active_slot_uq")
+      .on(t.organizationId, t.scheduledAt)
+      .where(
+        sql`${t.status} in ('agendada','realizada') and ${t.isTest} = false`
+      ),
+  ]
+);
+
+/**
+ * La memoria de lo ofrecido. Es lo que hace verificable el requisito
+ * innegociable: sin fila aquí, no hay reserva.
+ *
+ * Vive en el CRM y no en quien conduce la conversación porque Vocero promete
+ * "conecta TU propio cerebro": con la garantía del lado del cliente, cualquier
+ * cerebro podría reservar un instante que jamás se ofreció y el CRM lo
+ * aceptaría.
+ */
+export const offeredSlot = pgTable(
+  "offered_slot",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversation.id, { onDelete: "cascade" }),
+    startUtc: timestamp("start_utc").notNull(),
+    /** La etiqueta EXACTA que se le mostró al cliente. */
+    label: text("label").notNull(),
+    offeredAt: timestamp("offered_at").notNull().defaultNow(),
+  },
+  (t) => [index("offered_slot_conv_idx").on(t.conversationId, t.startUtc)]
+);
+
+/**
+ * Credenciales del conector Zoom (app Server-to-Server del propio negocio).
+ * Tabla explícita como las de WhatsApp e Instagram: unas credenciales tienen
+ * forma fija y conocida, y así conservan tipado e índices. El secreto se cifra
+ * con los mismos helpers; un segundo mecanismo sería otro que auditar.
+ */
+export const zoomCredentials = pgTable(
+  "zoom_credentials",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    accountId: text("account_id").notNull(),
+    clientId: text("client_id").notNull(),
+    secretCipher: text("secret_cipher").notNull(),
+    secretIv: text("secret_iv").notNull(),
+    secretTag: text("secret_tag").notNull(),
+    /** `error` SE ESCRIBE cuando el proveedor rechaza la autenticación. */
+    status: text("status", { enum: ["connected", "error"] })
+      .notNull()
+      .default("connected"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("zoom_credentials_org_uq").on(t.organizationId)]
+);
+
+/**
+ * Credenciales del conector Google (Calendar + Meet), de la app de Google
+ * Cloud del propio negocio. DOS secretos cifrados: el client secret y el
+ * refresh token pegado una sola vez.
+ */
+export const googleCredentials = pgTable(
+  "google_credentials",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    clientId: text("client_id").notNull(),
+    clientSecretCipher: text("client_secret_cipher").notNull(),
+    clientSecretIv: text("client_secret_iv").notNull(),
+    clientSecretTag: text("client_secret_tag").notNull(),
+    refreshTokenCipher: text("refresh_token_cipher").notNull(),
+    refreshTokenIv: text("refresh_token_iv").notNull(),
+    refreshTokenTag: text("refresh_token_tag").notNull(),
+    calendarId: text("calendar_id").notNull().default("primary"),
+    status: text("status", { enum: ["connected", "error"] })
+      .notNull()
+      .default("connected"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("google_credentials_org_uq").on(t.organizationId)]
+);
+
 export const agentTestCase = pgTable(
   "agent_test_case",
   {
@@ -645,4 +1053,288 @@ export const agentTestCase = pgTable(
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => [index("test_case_run_idx").on(t.runId)]
+);
+
+/* ============================================================
+ * 016 — Atribución de anuncios y Conversions API
+ * (detrás de la bandera ATRIBUCION)
+ * ============================================================ */
+
+/**
+ * De qué anuncio vino una conversación. El primer referral gana: el UNIQUE de
+ * abajo es lo que vuelve idempotente la captura ante los reintentos de Meta,
+ * en vez de un "consulta y luego inserta" que dos webhooks simultáneos
+ * ganarían los dos.
+ */
+export const adAttribution = pgTable(
+  "ad_attribution",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    contactId: text("contact_id")
+      .notNull()
+      .references(() => contact.id, { onDelete: "cascade" }),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversation.id, { onDelete: "cascade" }),
+    /**
+     * El identificador del clic en el anuncio. Es la llave de TODO: sin él no
+     * hay nada que reportarle a Meta. Nullable porque hay referrals sin clid,
+     * y porque sin la bandera ATRIBUCION no se guarda (018): el origen del
+     * anuncio se ve siempre, el identificador de clic solo si se atribuye.
+     */
+    ctwaClid: text("ctwa_clid"),
+    sourceId: text("source_id"),
+    sourceType: text("source_type"),
+    sourceUrl: text("source_url"),
+    headline: text("headline"),
+    body: text("body"),
+    mediaType: text("media_type"),
+    /**
+     * 018 — La imagen del creativo, copiada del CDN de Meta (su URL caduca en
+     * días). Compartida por todas las conversaciones del mismo `source_id`: se
+     * descarga una vez por anuncio. Borrar el adjunto deja la fila sin imagen,
+     * no apuntando a nada.
+     */
+    imageAssetId: text("image_asset_id").references(() => mediaAsset.id, {
+      onDelete: "set null",
+    }),
+    /**
+     * El referral recortado a sus claves conocidas (018: con cotas de tamaño,
+     * y sin `ctwa_clid` si la bandera estaba apagada). Es la póliza contra
+     * "Meta agregó un campo", y de aquí se vuelve a leer la URL de la imagen
+     * cuando hay que reparar la copia.
+     */
+    raw: jsonb("raw").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("ad_attribution_org_conversation_uq").on(
+      t.organizationId,
+      t.conversationId
+    ),
+    index("ad_attribution_org_contact_idx").on(t.organizationId, t.contactId),
+    // 018 — la imagen ya guardada de un anuncio, y a qué filas asignarla.
+    index("ad_attribution_org_source_idx").on(t.organizationId, t.sourceId),
+  ]
+);
+
+/**
+ * Cada intento de reportarle un desenlace a Meta. Las filas `skipped` no son
+ * basura: son la respuesta a "¿por qué este lead no aparece en Meta?", que sin
+ * ellas se contesta adivinando.
+ */
+export const conversionEvent = pgTable(
+  "conversion_event",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversation.id, { onDelete: "cascade" }),
+    attributionId: text("attribution_id").references(() => adAttribution.id, {
+      onDelete: "set null",
+    }),
+    /** Nombre del catálogo de Meta tal cual (`QualifiedLead`, `Purchase`). */
+    eventName: text("event_name").notNull(),
+    status: text("status", { enum: ["pending", "sent", "failed", "skipped"] })
+      .notNull()
+      .default("pending"),
+    /** Motivo legible: por qué se omitió, o qué contestó Meta. */
+    error: text("error"),
+    /**
+     * Acuse del envío. Es la única referencia que Meta pide para rastrear un
+     * evento de su lado; sin persistirla, un `sent` no se puede reclamar.
+     */
+    fbTraceId: text("fb_trace_id"),
+    sentAt: timestamp("sent_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    // El dedup ES este índice: la fila se inserta ANTES de hablar con Meta y
+    // con ON CONFLICT DO NOTHING. Dos movimientos simultáneos del mismo lead
+    // no pueden mandar dos compras.
+    uniqueIndex("conversion_event_org_conv_name_uq").on(
+      t.organizationId,
+      t.conversationId,
+      t.eventName
+    ),
+    index("conversion_event_org_created_idx").on(
+      t.organizationId,
+      t.createdAt
+    ),
+  ]
+);
+
+/** Conexión del negocio con su dataset de Meta (token cifrado en reposo). */
+export const capiSettings = pgTable(
+  "capi_settings",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    datasetId: text("dataset_id").notNull(),
+    tokenCipher: text("token_cipher").notNull(),
+    tokenIv: text("token_iv").notNull(),
+    tokenTag: text("token_tag").notNull(),
+    /**
+     * Qué etapa significa "lead calificado" PARA ESTE NEGOCIO. Las etapas
+     * sembradas de Vocero no incluyen ninguna con ese nombre y cada quien
+     * renombra las suyas, así que se elige en vez de adivinarse. NULL = ese
+     * evento no se emite. `set null` a propósito: borrar la etapa apaga el
+     * evento, no rompe la configuración.
+     */
+    qualifiedStageId: text("qualified_stage_id").references(
+      () => pipelineStage.id,
+      { onDelete: "set null" }
+    ),
+    status: text("status", { enum: ["connected", "error"] })
+      .notNull()
+      .default("connected"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("capi_settings_org_uq").on(t.organizationId)]
+);
+
+/* ============================================================
+ * Proveedor de IA (Ajustes → IA)
+ * ============================================================ */
+
+/**
+ * Credencial del proveedor de IA de la organización (puerto de `ai_credentials`
+ * de Vocero Cloud, issue #85). Una fila por organización: proveedor (su
+ * `base_url` OpenAI-compatible), modelo y token cifrado con los mismos helpers
+ * que el de WhatsApp; hacia fuera solo `token_last4`.
+ *
+ * `status` lo escribe el adaptador según lo que respondió QUIEN COBRA: 401 →
+ * `paused_invalid_token`, 402 → `paused_no_credit`. Un 429 o un 500 no pausan
+ * (ver `server/ai/credentials.ts`). Guardar un token nuevo vuelve a `active`.
+ *
+ * Sin fila, el adaptador cae a las variables `OPENROUTER_*` del entorno
+ * (respaldo para instalaciones automatizadas); con fila, la fila manda.
+ */
+export const aiCredentials = pgTable(
+  "ai_credentials",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    /** Preset de la UI; `base_url` es lo que de verdad identifica al proveedor. */
+    provider: text("provider", { enum: ["openrouter", "openai_compatible"] })
+      .notNull()
+      .default("openrouter"),
+    baseUrl: text("base_url").notNull(),
+    model: text("model").notNull(),
+    tokenCipher: text("token_cipher").notNull(),
+    tokenIv: text("token_iv").notNull(),
+    tokenTag: text("token_tag").notNull(),
+    /** Lo ÚNICO del token que puede salir hacia el cliente. */
+    tokenLast4: text("token_last4").notNull(),
+    status: text("status", {
+      enum: ["active", "paused_invalid_token", "paused_no_credit"],
+    })
+      .notNull()
+      .default("active"),
+    statusReason: text("status_reason"),
+    statusChangedAt: timestamp("status_changed_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("ai_credentials_org_uq").on(t.organizationId)]
+);
+
+/* ============================================================
+ * 021 — Despacho al cerebro
+ * ============================================================ */
+
+/**
+ * El outbox del despachador (spec 021): los turnos que el CRM le empuja a un
+ * cerebro externo. El mensaje ya está en `message` antes de que exista una
+ * fila aquí: bandeja primero, cerebro después.
+ *
+ * Misma tabla, columnas y estados que `dispatch` de Vocero Cloud, sin lo que
+ * allá es de la plataforma (`brain_generation`, `expires_at`, `brain_kind`,
+ * `responded_message_id`).
+ */
+export const dispatch = pgTable(
+  "dispatch",
+  {
+    /** Es el `dispatchId` que viaja al cerebro: la clave de idempotencia. */
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversation.id, { onDelete: "cascade" }),
+    status: text("status", {
+      enum: [
+        "pendiente",
+        "en_vuelo",
+        "entregado",
+        "caducado_a_humano",
+        "descartado",
+      ],
+    })
+      .notNull()
+      .default("pendiente"),
+    /** Sube al tomar la fila: distingue a dos dueños de un mismo lease. */
+    attempts: integer("attempts").notNull().default(0),
+    /**
+     * La ventana de agrupado: cada mensaje nuevo de la conversación la empuja
+     * hacia adelante. El worker solo toma filas cuyo `not_before` ya venció,
+     * así que una ráfaga se junta sola.
+     */
+    notBefore: timestamp("not_before").notNull().defaultNow(),
+    firstMessageAt: timestamp("first_message_at").notNull(),
+    lastMessageAt: timestamp("last_message_at").notNull(),
+    leasedUntil: timestamp("leased_until"),
+    /**
+     * 025 — Los entrantes que este despacho le DEBE al cerebro: los que lo
+     * encolaron o lo extendieron.
+     *
+     * La ráfaga se delimita por el último saliente, y eso confunde «sin
+     * responder» con «sin entregar»: lo que el cliente escribe mientras el
+     * cerebro piensa queda DETRÁS de su respuesta. Con los ids anotados, ese
+     * mensaje viaja aunque ya haya una respuesta después de él. Nulo en filas
+     * anteriores a esta columna, que se comportan como antes.
+     */
+    messageIds: jsonb("message_ids").$type<string[]>(),
+    /** Motivo del último fallo. Nunca el cuerpo firmado ni la llave. */
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    /**
+     * La pieza central de esta tabla: como máximo UN despacho vivo por
+     * conversación. De aquí salen el agrupado de ráfagas y el orden, y
+     * sobreviven a que alguien reescriba el worker, porque la garantía la da
+     * Postgres y no la lógica.
+     */
+    uniqueIndex("dispatch_conversation_vivo_uq")
+      .on(t.conversationId)
+      .where(sql`${t.status} in ('pendiente', 'en_vuelo')`),
+    /**
+     * La tarjeta «Quién responde» pregunta por el último entregado y el último
+     * fallido. Con `updated_at` en el índice esa pregunta cuesta lo mismo con
+     * cien filas que con un millón; sin él, cada refresco ordenaba todo el
+     * histórico. (En Vocero Cloud es `dispatch_org_status_idx`, sin la tercera
+     * columna: este es su superconjunto.)
+     */
+    index("dispatch_org_status_updated_idx").on(
+      t.organizationId,
+      t.status,
+      t.updatedAt
+    ),
+    // La consulta del worker: pendientes cuya ventana ya venció.
+    index("dispatch_status_notbefore_idx").on(t.status, t.notBefore),
+  ]
 );

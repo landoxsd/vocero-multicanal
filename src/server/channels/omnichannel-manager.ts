@@ -315,7 +315,7 @@ export class OmniChannelManager {
       await onLeadActivity(orgId, contactId, msgTimestamp);
 
       if (foundConv?.aiEnabled ?? true) {
-        maybeRunAgentTurn(convId).catch((err) => {
+        maybeRunAgentTurn(convId, orgId, messageId).catch((err) => {
           console.error("[OmniChannel] Error ejecutando turno de IA:", err);
         });
       }

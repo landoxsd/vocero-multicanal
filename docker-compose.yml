@@ -1,9 +1,27 @@
 # ============================================================
 # Vocero CRM — Ruta B: app + Postgres + Caddy (HTTPS automático)
-# Uso:  cp .env.example .env  →  rellenar  →  docker compose up -d --build
+# Uso:        pnpm init-env --domain tu.dominio  →  pnpm doctor  →  docker compose up -d
+#             (sin Node: cp .env.example .env y rellenar a mano)
+# Actualizar: git pull  →  docker compose up -d
+#
+# La app sale de la imagen publicada de la versión (una por tag vX.Y.Z). Con
+# `image` y `build` juntos y sin `pull_policy`, Compose intenta primero
+# descargar la imagen y solo la construye desde este repo si no la encuentra
+# ni en el registro ni en tu máquina (especificación de Compose, «Using build
+# and image»: docs.docker.com/reference/compose-file/build/):
+#
+#   docker compose up -d           la imagen publicada
+#   docker compose up -d --build   construida desde el código (la publicada
+#                                  es linux/amd64: en un VPS ARM, construye)
+#
+# Lo que construyes queda en tu máquina con este mismo nombre de imagen. En un
+# fork con cambios propios usa siempre --build (o cambia `image:` por un
+# nombre tuyo): sin él, Compose puede correr la imagen oficial en vez de tus
+# cambios. Otra versión publicada: VOCERO_CRM_VERSION=X.Y.Z en tu .env.
 # ============================================================
 services:
   app:
+    image: ghcr.io/kevinrivm/vocero-crm:${VOCERO_CRM_VERSION:-1.6.0}
     build: .
     restart: unless-stopped
     environment:
@@ -24,11 +42,19 @@ services:
       AGENT_COALESCE_MS: ${AGENT_COALESCE_MS:-6000}
       WA_WEB_MANAGER_URL: http://whatsapp-web-manager:3005
       WA_WEB_INTERNAL_WEBHOOK_URL: http://app:3000/api/webhooks/whatsapp-web
-      WA_WEB_WEBHOOK_SECRET: ${WA_WEB_WEBHOOK_SECRET}
+      WA_WEB_WEBHOOK_SECRET: ${WA_WEB_WEBHOOK_SECRET:-}
       WA_WEB_MANAGER_API_KEY: ${WA_WEB_MANAGER_API_KEY:-}
-      MEDIA_DIR: /data/media
+      # Opcionales: vacías = apagadas (guía de cada una en .env.example).
+      CHANNELS: ${CHANNELS:-}
+      AGENDA: ${AGENDA:-}
+      ATRIBUCION: ${ATRIBUCION:-}
+      BOT_API_KEY: ${BOT_API_KEY:-}
+      BRAIN_HEALTH_URL: ${BRAIN_HEALTH_URL:-}
+      BRAIN_DISPATCH_URL: ${BRAIN_DISPATCH_URL:-}
     volumes:
-      - vocero_media:/data/media
+      # Adjuntos, logo e icono (la imagen ya trae MEDIA_DIR=/data/media): sin
+      # este volumen se pierden al recrear el contenedor.
+      - vocero_app_data:/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -96,6 +122,7 @@ services:
 
 volumes:
   vocero_pg:
+  vocero_app_data:
   vocero_caddy_data:
   vocero_caddy_config:
   vocero_wa_sessions:

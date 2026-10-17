@@ -65,6 +65,11 @@ TODOs diferidos (cumplimiento, no redacción):
   - `whatsapp-web-manager` en `docker-compose.yml` (Ruta B).
   - Instagram / MercadoLibre / Messenger: adaptadores presentes, no
     activados como producto.
+Versión: 2.0.0 → 2.1.0 (Merge v1.6.0 upstream + Omnicanal)
+
+Cambios:
+  - Incorporada enmienda 1.4.0 de upstream: conectores opcionales tras bandera (AGENDA, CHANNELS, ATRIBUCION).
+  - Preservados principios omnicanal del fork: WhatsApp Web self-hosted (`services/whatsapp-web-manager/`), MercadoLibre y Gemini nativo (`GEMINI_API_KEY`).
 -->
 
 # Vocero CRM Constitution
@@ -104,34 +109,35 @@ base de datos son self-hosted (Better Auth + PostgreSQL de la instancia). Las
 integraciones externas se aíslan tras adaptadores; el dominio (contacto,
 conversación, lead, agente) no se acopla a un proveedor.
 
-Dependencias externas de runtime PERMITIDAS:
-
+Dependencias externas permitidas en runtime:
 1. **Canales de mensajería**, cada uno detrás de un adaptador en
    `src/server/channels/` o, para Cloud API, `src/lib/meta/` + `src/server/whatsapp/`:
-   - WhatsApp Cloud API (Meta Graph API) — camino oficial, ventana 24 h y plantillas.
-   - WhatsApp Web self-hosted — microservicio `services/whatsapp-web-manager/`
+   - **WhatsApp Cloud API** (Meta Graph API) — camino oficial, ventana 24 h y plantillas.
+   - **WhatsApp Web self-hosted** — microservicio `services/whatsapp-web-manager/`
      (Puppeteer / whatsapp-web.js). El CRM no habla con el DOM de WhatsApp; solo
      con la API interna del manager. Cliente no oficial: aceptado en ESTE fork,
      con los guardarraíles del Principio IX.
-   - Otros canales del modelo (`instagram`, `mercadolibre`, `facebook_messenger`)
-     cuando su adaptador esté cableado de punta a punta. Un enum en el schema no
-     equivale a un canal entregado.
+   - **Canales adicionales** (`instagram`, `messenger`, `tiktok` tras bandera `CHANNELS`,
+     o `mercadolibre`) cuando su adaptador esté cableado de punta a punta.
 2. **Proveedor LLM**, opcional, accedido EXCLUSIVAMENTE por `src/lib/ai/`
-   (`chatJson<T>`): OpenRouter-compatible y/o **Gemini nativo** (`GEMINI_API_KEY`).
+   (`chatJson<T>`): OpenRouter-compatible, OpenAI-compatible o **Gemini nativo** (`GEMINI_API_KEY`).
    Sin ninguna key, el producto funciona como CRM sin agente.
+3. **Conectores opcionales** (Agenda tras `AGENDA=on`, Atribución CAPI tras `ATRIBUCION=on`),
+   únicamente bajo las 5 condiciones constitucionales:
+   - Apagados por defecto tras una bandera de despliegue.
+   - Aislados tras adaptadores dedicados con contrato público estable.
+   - La instancia funciona completa sin ellos (camino sin dependencia y degradación definida).
+   - Credenciales del propio negocio cifradas en reposo (AES-256-GCM).
+   - Verificables en CI apagados y encendidos con mocks.
 
 PROHIBIDO:
-
-- Almacenamiento de objetos externo (S3/R2), correo transaccional, Stripe u otro
-  billing.
-- Google como Drive, Gmail, OAuth de login o object storage. Gemini como LLM
-  detrás de `lib/ai` SÍ está permitido.
-- Hablar con WhatsApp Web, Instagram privado u otras APIs no oficiales desde el
-  monolito Next.js: eso vive en el manager o en el adaptador de canal.
+- Almacenamiento de objetos externo (S3/R2), correo transaccional, Stripe u otro billing.
+- Google como Drive, Gmail, OAuth de login o object storage. Gemini como LLM detrás de `lib/ai` o Google Calendar como conector opcional de agenda SÍ están permitidos bajo sus adaptadores.
+- Hablar con WhatsApp Web, Instagram privado u otras APIs no oficiales desde el monolito Next.js: eso vive en el manager o en el adaptador de canal.
 
 La ventana de 24 horas y las plantillas de Meta aplican a conversaciones del
-camino Cloud API. MUST NOT usarse esas reglas para bloquear envío en WhatsApp
-Web u otros canales que no las imponen.
+camino Cloud API y canales con ventana. En WhatsApp Web u otros canales que no
+las imponen, no se bloquea el envío de texto libre.
 
 El instalador de este fork necesita: VPS con Docker, dominio HTTPS para webhooks
 oficiales, y según canales conectados: credenciales de Meta, el servicio del
@@ -368,4 +374,4 @@ práctica, convención o preferencia; ante un conflicto, gana la constitución.
 - **Propagación**: al enmendar la constitución se revisan y, si procede, se actualizan
   las plantillas dependientes (plan, spec, tasks) y la guía de agentes (`CLAUDE.md`).
 
-**Version**: 2.0.0 | **Ratified**: 2026-07-09 | **Last Amended**: 2026-08-28
+**Version**: 2.1.0 | **Ratified**: 2026-07-09 | **Last Amended**: 2026-10-17

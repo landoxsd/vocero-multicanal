@@ -36,15 +36,36 @@ type MockMediaInput = {
   location?: Record<string, unknown>;
 };
 
+/**
+ * #78 — Respuestas de botón con la forma de Meta. `button` es la respuesta a
+ * un botón de plantilla; `interactive` se pasa entero (como el `referral`)
+ * para poder probar `button_reply`, `list_reply` y las formas rotas.
+ */
+type MockButtonInput = {
+  button?: { text: string; payload?: string };
+  interactive?: Record<string, unknown>;
+};
+
 const MOCK_BINARY_TYPES = new Set(["image", "video", "audio", "document", "sticker"]);
 
 function applyMockContent(
   message: Record<string, unknown>,
   type: string,
-  input: { text?: string } & MockMediaInput
+  input: { text?: string } & MockMediaInput & MockButtonInput
 ): void {
   if (type === "text") {
     message.text = { body: input.text ?? "hola" };
+  } else if (type === "button") {
+    // Como lo manda Meta: `context` apunta a la plantilla que traía el botón.
+    const text = input.button?.text ?? input.text ?? "Sí";
+    message.context = { from: "5215500000000", id: `wamid.mock.tpl.${nextN()}` };
+    message.button = { payload: input.button?.payload ?? text, text };
+  } else if (type === "interactive") {
+    message.context = { from: "5215500000000", id: `wamid.mock.int.${nextN()}` };
+    message.interactive = input.interactive ?? {
+      type: "button_reply",
+      button_reply: { id: "btn_mock", title: input.text ?? "Sí" },
+    };
   } else if (type === "location") {
     message.location = input.location ?? {
       latitude: 21.019,
@@ -63,6 +84,21 @@ function applyMockContent(
   }
 }
 
+/** 016 — Campos para simular que el mensaje vino de un anuncio CTWA. */
+type MockReferralInput = {
+  /** Identificador del clic. Sin él no hay nada que reportarle a Meta. */
+  ctwaClid?: string;
+  adHeadline?: string;
+  adSourceId?: string;
+  /**
+   * 018 — El `referral` tal cual lo mandaría Meta. Gana sobre los campos de
+   * arriba y se pasa entero, no campo por campo, para poder probar también las
+   * formas raras (sin `source_id`, cadenas gigantes, tipos equivocados) y la
+   * URL del creativo.
+   */
+  referral?: Record<string, unknown>;
+};
+
 export function buildInboundPayload(input: {
   wabaId: string;
   phoneNumberId: string;
@@ -75,7 +111,9 @@ export function buildInboundPayload(input: {
   text?: string;
   waMessageId?: string;
   timestamp?: number;
-} & MockMediaInput) {
+} & MockMediaInput &
+  MockReferralInput &
+  MockButtonInput) {
   const type = input.type ?? "text";
   const message: Record<string, unknown> = {
     id: input.waMessageId ?? `wamid.mock.in.${nextN()}`,
@@ -86,8 +124,34 @@ export function buildInboundPayload(input: {
   if (input.fromUserId) message.from_user_id = input.fromUserId;
   applyMockContent(message, type, input);
 
+  // 016 — El referral solo viaja cuando la conversación nació de un anuncio, y
+  // normalmente solo en el primer mensaje. Se arma igual que el real para que
+  // la ingesta no sepa que habla con un mock.
+  if (input.referral) {
+    message.referral = input.referral;
+  } else if (input.ctwaClid || input.adHeadline || input.adSourceId) {
+    message.referral = {
+      source_type: "ad",
+      source_id: input.adSourceId ?? "1200000000000",
+      source_url: "https://fb.me/anuncio-de-prueba",
+      headline: input.adHeadline ?? "Anuncio de prueba",
+      body: "Escríbenos por WhatsApp",
+      media_type: "image",
+      ...(input.ctwaClid ? { ctwa_clid: input.ctwaClid } : {}),
+    };
+  }
+
   const contactEntry: Record<string, unknown> = {
-    profile: { name: input.name ?? "Cliente" },
+    /**
+     * Sin nombre pedido, el payload va SIN `profile` — como el de Meta.
+     *
+     * Antes se inventaba «Cliente», y eso dejó de ser inofensivo en cuanto el
+     * nombre del contacto pasó a mantenerse al día con el perfil (#51): un
+     * segundo mensaje de la misma persona lo renombraba a «Cliente», que es
+     * algo que Meta no manda nunca. Un mock que inventa datos acaba probando
+     * su propia ficción.
+     */
+    ...(input.name ? { profile: { name: input.name } } : {}),
   };
   if (input.from) contactEntry.wa_id = input.from;
   if (input.fromUserId) contactEntry.user_id = input.fromUserId;

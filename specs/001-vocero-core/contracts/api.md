@@ -25,9 +25,9 @@ Todas autenticadas por sesión Better Auth y scoped a la organización del usuar
 | `GET/POST /api/templates` | lista / crear+enviar a aprobación |
 | `POST /api/templates/sync` | sincronizar estados por Graph (pull; cubre modo agencia) |
 | `GET /api/pipeline/board` | etapas + tarjetas del kanban en una llamada |
-| `GET/PUT /api/settings/whatsapp` | estado conexión / guardar credenciales |
+| `GET/PUT/DELETE /api/settings/whatsapp` | estado conexión / guardar credenciales y registrar el webhook en Meta (`webhook` en la respuesta) / desconectar el número (no toca conversaciones) |
 | `POST /api/settings/whatsapp/test` | probar conexión (valida token↔número, NO guarda) |
-| `GET /api/settings/webhook` | URL completa del webhook + estado firma |
+| `GET/POST /api/settings/webhook` | URL completa del webhook + estado firma / registrar el webhook en Meta con la conexión guardada (409 sin conexión, 422/503 con el motivo de Meta) |
 | `GET/POST /api/settings/team` | miembros / crear cuenta (owner only) |
 | `POST /api/seed/demo` | cargar demo (solo BD vacía de dominio; idempotente) |
 | `POST /api/auth/[...all]` | Better Auth (registro gated por 1ª org / `ALLOW_SIGNUP`) |

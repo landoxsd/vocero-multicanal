@@ -101,7 +101,7 @@ export function NewContactDialog({
       <div
         role="dialog"
         aria-label="Nuevo contacto"
-        className="w-full max-w-md rounded-lg border bg-card p-5 shadow-xl"
+        className="w-full max-w-md rounded-lg border bg-popover p-5 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <h3 className="mb-1 font-semibold">Nuevo contacto</h3>
@@ -131,7 +131,7 @@ export function NewContactDialog({
               id="nc-phone"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              placeholder="52 462 134 9768"
+              placeholder="52 555 000 1234"
             />
             <p className="text-[11px] text-text-3">
               Escríbelo con espacios si quieres, pero{" "}

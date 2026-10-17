@@ -8,7 +8,7 @@ import { z } from "zod";
  * que en esa fase se aceptan placeholders — los valores reales llegan al boot.
  */
 
-const envSchema = z.object({
+export const envSchema = z.object({
   APP_BASE_URL: z.string().url(),
   DATABASE_URL: z.string().min(1),
   BETTER_AUTH_SECRET: z.string().min(16),
@@ -28,12 +28,47 @@ const envSchema = z.object({
   OPENROUTER_JUDGE_MODEL: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default("gemini-3.6-flash"),
+  // 014/017: canales encendidos, separados por coma. WhatsApp siempre esta on.
+  // Ej.: CHANNELS=whatsapp,instagram,messenger. Sin ella, la instancia es solo
+  // WhatsApp y las superficies de los demas canales responden 404.
+  CHANNELS: z.string().optional(),
+  // 015: motor de agenda. Apagado por defecto — sin el, toda la superficie de
+  // agenda responde 404 y la UI no la menciona. Ej.: AGENDA=on
+  AGENDA: z.string().optional(),
+  // 016: atribucion de anuncios y reporte a la Conversions API de Meta.
+  // Apagada por defecto: sin ella no se captura de que anuncio vino una
+  // conversacion, no se le reporta nada a Meta y la superficie da 404.
+  // Ej.: ATRIBUCION=on
+  ATRIBUCION: z.string().optional(),
+  // 015: bases de los conectores. Solo se sobreescriben para apuntar a los
+  // mocks en el self-test; en producción se usan las reales.
+  ZOOM_BASE_URL: z.string().url().default("https://api.zoom.us/v2"),
+  ZOOM_OAUTH_BASE_URL: z.string().url().default("https://zoom.us"),
+  GOOGLE_CAL_BASE_URL: z
+    .string()
+    .url()
+    .default("https://www.googleapis.com/calendar/v3"),
+  GOOGLE_OAUTH_BASE_URL: z.string().url().default("https://oauth2.googleapis.com"),
   ALLOW_SIGNUP: z.string().optional(),
   AGENT_COALESCE_MS: z.coerce.number().int().min(0).default(6000),
   WA_MOCK_ENABLED: z.string().optional(),
   // API key de un cerebro externo que conduzca la conversación por /api/bot/*.
   // Sin ella, toda esa superficie responde 401.
   BOT_API_KEY: z.string().optional(),
+  // «Quién responde a tus clientes»: el /health del cerebro externo (Nea),
+  // consultado desde el servidor. Ej.: http://nea:8000/health (alias de la
+  // red de Coolify). Sin ella, la tarjeta del Agente no pregunta a nadie.
+  // No se valida aquí a propósito: es opcional y solo de diagnóstico, y con
+  // `.url()` un valor mal escrito tumbaba el CRM entero (el entorno no
+  // validaba y todo respondía 503). La tarjeta la marca como problema de
+  // configuración y lo demás sigue funcionando (server/bot/status.ts).
+  BRAIN_HEALTH_URL: z.string().optional(),
+  // 021: a dónde le despacha el CRM cada turno al cerebro externo. Ej.:
+  // http://nea:8000/vocero/dispatch. Con ella y `BOT_API_KEY`, el agente
+  // incluido deja de contestar: contesta el cerebro. Tampoco se valida aquí,
+  // por lo mismo que la de arriba: mal escrita, el despacho queda inactivo y
+  // la tarjeta lo dice (server/brains/config.ts).
+  BRAIN_DISPATCH_URL: z.string().optional(),
   // 008: volumen local de adjuntos (constitución II: sin S3/R2).
   MEDIA_DIR: z.string().default("./.dev-media"),
   NODE_ENV: z.string().default("development"),
@@ -51,15 +86,24 @@ const BUILD_PLACEHOLDERS: Record<string, string> = {
 
 let cached: Env | null = null;
 
+/**
+ * Valida un entorno contra el esquema SIN lanzar ni cachear. Es lo que usa
+ * `getEnv()` y también `pnpm doctor` (scripts/doctor.ts): un solo esquema y
+ * una sola regla para los strings vacíos, que cuentan como ausentes porque
+ * los compose/paneles suelen inyectar VAR="" para opcionales y eso debe
+ * activar los defaults.
+ */
+export function safeParseEnv(source: Record<string, string | undefined>) {
+  return envSchema.safeParse(stripEmpty(source));
+}
+
 export function getEnv(): Env {
   if (cached) return cached;
   const isBuild = process.env.NEXT_PHASE === "phase-production-build";
-  // Los strings vacíos cuentan como ausentes: los compose/paneles suelen
-  // inyectar VAR="" para opcionales y eso debe activar los defaults.
   const source = isBuild
     ? { ...BUILD_PLACEHOLDERS, ...stripEmpty(process.env) }
-    : stripEmpty(process.env);
-  const parsed = envSchema.safeParse(source);
+    : process.env;
+  const parsed = safeParseEnv(source);
   if (!parsed.success) {
     const missing = parsed.error.issues
       .map((i) => `${i.path.join(".")}: ${i.message}`)
@@ -73,7 +117,7 @@ export function getEnv(): Env {
   return cached;
 }
 
-function stripEmpty(env: NodeJS.ProcessEnv): Record<string, string> {
+function stripEmpty(env: Record<string, string | undefined>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(env)) {
     if (v !== undefined && v !== "") out[k] = v;
@@ -89,8 +133,12 @@ export function isMockEnabled(): boolean {
   );
 }
 
-/** true si hay proveedor de IA configurado (OpenRouter o Gemini presente y no vacío). */
-export function isAiConfigured(): boolean {
+/**
+ * true si el ENTORNO trae proveedor de IA (`OPENROUTER_API_TOKEN` o
+ * `GEMINI_API_KEY` presente y no vacío). Es el respaldo cuando no hay nada
+ * guardado en Ajustes → IA (`isAiConfiguredFor()` en `lib/ai/provider.ts`).
+ */
+export function isAiConfiguredByEnv(): boolean {
   const token = process.env.OPENROUTER_API_TOKEN;
   const gemini = process.env.GEMINI_API_KEY;
   return (
@@ -98,3 +146,5 @@ export function isAiConfigured(): boolean {
     (typeof gemini === "string" && gemini.trim().length > 0)
   );
 }
+
+export const isAiConfigured = isAiConfiguredByEnv;

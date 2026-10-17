@@ -3,32 +3,64 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { settingsSections } from "@/lib/nav";
 
-const TABS = [
-  { href: "/settings/channels", label: "Canales" },
-  { href: "/settings/whatsapp", label: "WhatsApp Cloud" },
-  { href: "/settings/branding", label: "Marca" },
-  { href: "/settings/templates", label: "Plantillas" },
-  { href: "/settings/team", label: "Equipo" },
-] as const;
-
-export function SettingsNav() {
+/**
+ * #87 — Ajustes en tres secciones (Canales, Agente, Negocio). Qué enlaces
+ * existen lo decide el servidor y baja por prop: este es un componente de
+ * cliente y no puede leer variables de entorno.
+ *
+ * Por debajo de `sm` las secciones van en una fila que se desplaza, cada una
+ * con su encabezado delante de sus enlaces, para que en el teléfono siga
+ * siendo una tira de pestañas navegable y no una columna que empuje el
+ * contenido abajo.
+ */
+export function SettingsNav({
+  agenda = false,
+  atribucion = false,
+  instagram = false,
+  messenger = false,
+  tiktok = false,
+}: {
+  agenda?: boolean;
+  atribucion?: boolean;
+  instagram?: boolean;
+  messenger?: boolean;
+  tiktok?: boolean;
+}) {
   const pathname = usePathname();
+  const sections = settingsSections({ agenda, atribucion, instagram, messenger, tiktok });
   return (
-    <nav className="flex shrink-0 gap-1 overflow-x-auto border-b p-2 sm:w-44 sm:flex-col sm:space-y-1 sm:overflow-visible sm:border-b-0 sm:border-r sm:p-3">
-      {TABS.map((t) => (
-        <Link
-          key={t.href}
-          href={t.href}
-          className={cn(
-            "block shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors",
-            pathname.startsWith(t.href)
-              ? "bg-brand-tint text-brand-text"
-              : "text-muted-foreground hover:bg-accent hover:text-foreground"
-          )}
+    <nav
+      aria-label="Ajustes"
+      className="flex shrink-0 gap-4 overflow-x-auto border-b px-2 py-2 sm:w-48 sm:flex-col sm:gap-5 sm:overflow-visible sm:border-b-0 sm:border-r sm:p-3"
+    >
+      {sections.map((section) => (
+        <div
+          key={section.title}
+          className="flex shrink-0 items-center gap-1 sm:flex-col sm:items-stretch sm:gap-0.5"
         >
-          {t.label}
-        </Link>
+          <span className="kicker mr-1 shrink-0 sm:mb-1 sm:mr-0 sm:px-3">{section.title}</span>
+          {section.links.map((t) => {
+            const active = pathname.startsWith(t.href);
+            return (
+              <Link
+                key={t.href}
+                href={t.href}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "block shrink-0 whitespace-nowrap rounded-sm px-3 py-2 text-[13.5px] font-semibold transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  active
+                    ? "bg-brand-tint text-brand-text"
+                    : "text-text-2 hover:bg-accent hover:text-foreground"
+                )}
+              >
+                {t.label}
+              </Link>
+            );
+          })}
+        </div>
       ))}
     </nav>
   );

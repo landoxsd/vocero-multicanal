@@ -12,12 +12,20 @@ export type EventHandlers = {
     error?: string | null;
   }) => void;
   onConversationUpdated?: (data: { conversation: unknown }) => void;
+  /** 026 */
+  onConversationDeleted?: (data: {
+    conversationId: string;
+    contactId: string;
+    contactDeleted: boolean;
+  }) => void;
   onLabRun?: (data: {
     runId: string;
     status: string;
     progress: { done: number; total: number };
     score?: number | null;
   }) => void;
+  /** 015 — Algo cambió en la agenda (también cuando agenda la IA). */
+  onBookingUpdated?: (data: { bookingId: string }) => void;
   /** Se llama tras RECONECTAR (no en la conexión inicial): catch-up con refetch. */
   onReconnect?: () => void;
 };
@@ -52,7 +60,13 @@ export function useEvents(handlers: EventHandlers): void {
     listen("conversation.updated", (d) =>
       handlersRef.current.onConversationUpdated?.(d as never)
     );
+    listen("conversation.deleted", (d) =>
+      handlersRef.current.onConversationDeleted?.(d as never)
+    );
     listen("lab.run", (d) => handlersRef.current.onLabRun?.(d as never));
+    listen("booking.updated", (d) =>
+      handlersRef.current.onBookingUpdated?.(d as never)
+    );
 
     source.onerror = () => {
       hadError = true;

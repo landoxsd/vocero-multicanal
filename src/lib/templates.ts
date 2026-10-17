@@ -43,6 +43,32 @@ export function validateBodyVariables(body: string): string | null {
   return null;
 }
 
+/**
+ * Lo que suele hacer que Meta rechace una plantilla aunque las variables
+ * estén bien numeradas. No bloquea el envío —Meta decide—, solo avisa antes
+ * de esperar horas por un rechazo previsible.
+ */
+export function templateWarnings(body: string): string[] {
+  const text = body.trim();
+  if (!text) return [];
+  const warnings: string[] = [];
+  if (/^\{\{\s*\d+\s*\}\}/.test(text)) {
+    warnings.push("Empieza con una variable: Meta suele rechazarlas. Pon un saludo antes, p. ej. «Hola {{1}}».");
+  }
+  if (/\{\{\s*\d+\s*\}\}[\s.!?¡¿]*$/.test(text)) {
+    warnings.push("Termina con una variable: Meta suele rechazarlas. Añade una frase después.");
+  }
+  if (/\}\}\s*\{\{/.test(text)) {
+    warnings.push("Hay dos variables juntas: sepáralas con texto.");
+  }
+  const variables = countVariables(text);
+  const words = text.replace(VARIABLE_REGEX, " ").split(/\s+/).filter(Boolean).length;
+  if (variables > 0 && words < variables * 3) {
+    warnings.push("Tiene muchas variables para lo corto del mensaje: Meta pide más texto fijo alrededor.");
+  }
+  return warnings;
+}
+
 /** Sustituye {{n}} por `variables[n-1]` (vacío si no hay valor). */
 export function renderBody(body: string, variables: string[] = []): string {
   return body.replace(VARIABLE_REGEX, (_match, index: string) => {

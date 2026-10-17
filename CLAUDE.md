@@ -1,20 +1,20 @@
 # Vocero CRM — Guía para Claude
 
-Este repo es un **fork de Vocero** (MIT): CRM self-hosted convertido en
-**atención unificada omnicanal** con agente de IA integrado. Una instancia =
-un negocio. WhatsApp se opera por **Cloud API** y/o por **WhatsApp Web +
-Puppeteer** (`services/whatsapp-web-manager/`), con mejoras propias de este
-fork (identidad, sync, outbound, Gemini). Este archivo guía a Claude Code (u
-otro asistente) para **modificar** el repositorio.
-
-No trates el código omnicanal como una violación del Vocero original: la
-constitución vigente es **2.0.0**.
+Este repo es un **fork omnicanal de Vocero** (MIT): CRM self-hosted con atención
+unificada (WhatsApp Cloud API, WhatsApp Web por QR, Instagram, Messenger, TikTok,
+MercadoLibre), motor de citas, analíticas y agente de IA integrado (OpenRouter,
+OpenAI-compatible o Gemini nativo). Una instancia = un negocio. Lee también [AGENTS.md](AGENTS.md):
+el mapa del código y las reglas de modificación viven ahí; este archivo añade lo
+específico para Claude Code.
 
 ## Stack
 
 **Next.js 15 (App Router) + React 19** en monolito · TypeScript estricto
-(`strict` + `noUncheckedIndexedAccess`) · Tailwind CSS (tema oscuro propio,
-acento `#25D366`) · **PostgreSQL + Drizzle ORM** (migraciones versionadas en
+(`strict` + `noUncheckedIndexedAccess`) · Tailwind CSS (sistema de diseño de la
+marca Vocero: tokens en `src/app/globals.css`, tema claro/oscuro, acento white-label
+por defecto `#0d5bff`, fuentes Archivo + Instrument Serif + IBM Plex Mono self-hosted
+vía `next/font`; el logo vive en `src/lib/brand.ts` y se dibuja con `src/components/brand-mark.tsx`) ·
+**PostgreSQL + Drizzle ORM** (migraciones versionadas en
 `drizzle/`, aplicadas al ARRANCAR el contenedor) · **Better Auth** + plugin
 organization · **Zod** en todo input externo · nanoid con prefijos (`ct_`,
 `cv_`, `msg_`…) · pnpm · Vitest (unit) + guiones E2E en `tests/e2e/`
@@ -22,28 +22,32 @@ conducidos con Playwright · Docker multi-stage (standalone, healthcheck
 `/api/health`) · deploy en Coolify (Ruta A) o docker compose + Caddy (Ruta B).
 
 Tiempo real hacia el **navegador** por **SSE** (`/api/events`). Entre el CRM y
-el manager, en red privada, hay **WebSocket** (`/ws/events`) además del webhook
-HTTP de respaldo (el compose aún no orquesta el manager en dev local sin compose:
-trátalo como deuda operativa solo fuera de Ruta B).
+el manager de WhatsApp Web hay **WebSocket** (`/ws/events`) además del webhook
+HTTP de respaldo.
 
 ## Mapa del código (fronteras de modificación)
 
 | Quieres cambiar… | Toca… |
 |---|---|
-| El cerebro/proveedor LLM | `src/lib/ai/` (`chatJson<T>`: Gemini nativo y/o OpenRouter) |
+| El cerebro/proveedor LLM | `src/lib/ai/` (`chatJson<T>`: Gemini nativo, OpenAI o OpenRouter) |
 | El comportamiento/prompt del agente | `src/server/ai/prompts.ts` |
 | Las acciones que puede tomar el agente | `src/server/ai/actions.ts` + ejecución en `src/server/ai/pipeline.ts` |
 | Las personas o el juez del Laboratorio | `src/server/lab/personas.ts` · `src/server/lab/judge.ts` |
-| WhatsApp Cloud API (Graph) | `src/lib/meta/` + `src/server/whatsapp/` |
+| El canal WhatsApp (Graph API) | `src/lib/meta/` (cliente único) + `src/server/whatsapp/` |
 | WhatsApp Web / Puppeteer | `services/whatsapp-web-manager/` + `src/server/channels/whatsapp-web/` |
 | Orquestación omnicanal | `src/server/channels/omnichannel-manager.ts` + `src/server/channels/types.ts` |
-| IG / MeLi / Messenger | adaptadores en `src/server/channels/{instagram,mercadolibre,facebook}/` — no están entregados hasta estar cableados de punta a punta |
+| Los canales opcionales (Instagram, Messenger, TikTok; ADR-001) | `src/lib/channels.ts` (catálogo) · `src/server/channels/` (capacidades y bandera `CHANNELS`) · `src/server/instagram/` · `src/server/messenger/` · `src/server/tiktok/` · `src/server/zernio/` |
 | Campos/tablas | `src/lib/db/schema.ts` → `pnpm db:generate` → migración nueva en `drizzle/` |
-| Ingesta/envío Cloud API | `src/server/inbox/` (ingest idempotente, send con sandbox; ventana 24h **solo** Cloud) |
-| Envío que elige canal | `src/server/inbox/send.ts` (Graph vs `omniChannelManager`) |
-| Cómo se identifica a un contacto | `src/server/inbox/identity.ts` + normalización por dígitos en el camino Web |
-| Conectar TU propio bot en vez del agente | `src/app/api/bot/*` + `src/server/bot/auth.ts` (X-API-Key) |
-| UI | `src/components/` + `src/app/(app)/` (canales: `settings/channels`) |
+| La ingesta/envío de mensajes | `src/server/inbox/` (ingest idempotente, send con guard de sandbox, ventana 24h por canal) |
+| Envío que elige canal | `src/server/inbox/send.ts` (Graph/Zernio vs `omniChannelManager`) |
+| Cómo se identifica a un contacto | `src/server/inbox/identity.ts` (teléfono normalizado, `bsuid:<id>`, `ig:<id>`, `fb:<id>`, `tt:<id>`) |
+| Conectar TU propio bot en vez del agente | `src/app/api/bot/*` + `src/server/bot/auth.ts` (X-API-Key) · quién responde: `src/server/bot/status.ts` + `GET /api/agent/brain-status` |
+| La agenda (horarios, huecos, citas) | `src/server/agenda/` — detrás de la bandera `AGENDA` (`flag.ts`) |
+| Cómo se entrega la reunión (Zoom, Meet…) | `src/server/agenda/connectors/` + catálogo en `src/lib/agenda-connectors.ts` · guía: [docs/agenda-conectores.md](docs/agenda-conectores.md) |
+| De qué anuncio llegó cada conversación | `src/server/attribution/referral.ts` · `creativo.ts` · `store.ts` · tarjeta en `src/components/anuncio-origen.tsx` |
+| Los números de Resultados | `src/server/analytics/` (ventas, agente, origen y anuncios, higiene) · UI en `src/components/results/` |
+| La atribución de anuncios y CAPI | `src/server/attribution/` — detrás de la bandera `ATRIBUCION` (`flag.ts`) + `src/lib/meta/capi.ts` |
+| UI | `src/components/` + `src/app/(app)/` |
 
 Los mocks del entorno de pruebas viven en `src/app/api/dev/` (wa-mock +
 ai-mock) tras un gate único (`src/lib/dev-guard.ts`): 404 incondicional en
@@ -51,7 +55,7 @@ producción.
 
 **Identidad de contacto**: en Cloud API, Meta migra de teléfono a
 Business-Scoped User IDs; `from` puede no venir. La llave estable es
-`contact.wa_identity` (teléfono normalizado 521→52, o `bsuid:<id>`); `phone`
+`contact.wa_identity` (teléfono normalizado 521→52, o `bsuid:<id>`, `ig:<id>`, etc.); `phone`
 es OPCIONAL. En WhatsApp Web se unifica por dígitos (`+58…` / `58…` /
 `@c.us`). Nunca asumas que un contacto tiene teléfono.
 
@@ -67,33 +71,39 @@ sin comportamiento nuevo.
 
 ## Reglas de la constitución (no negociables)
 
-Ver [.specify/memory/constitution.md](.specify/memory/constitution.md) (v2.0.0).
+Ver [.specify/memory/constitution.md](.specify/memory/constitution.md) (v2.1.0).
 
-- **Soberanía (II)**: self-hosted. Canales solo por adaptadores. LLM solo por
-  `lib/ai` (Gemini y/o OpenRouter). PROHIBIDO S3/R2, email, Stripe, Google
-  como Drive/Gmail/login. El manager de WhatsApp Web es el único sitio del
-  cliente no oficial. Ventana 24 h / plantillas: Cloud API, no Web.
+- **Soberanía (II, omnicanal con conectores)**: self-hosted. Canales oficiales
+  (WhatsApp Cloud, Instagram, Messenger, TikTok) y self-hosted (WhatsApp Web vía manager).
+  LLM vía `lib/ai` (Gemini, OpenRouter, OpenAI-compatible). Conectores opcionales (Agenda, CAPI)
+  tras banderas de despliegue (`AGENDA=on`, `ATRIBUCION=on`), aislados tras adaptadores,
+  sin bloquear la operación core si fallan. PROHIBIDO S3/R2, email o billing como dependencia core.
 - **Seguridad (I)**: secretos cifrados en reposo (AES-256-GCM, `lib/crypto`);
-  jamás al cliente ni a logs. Webhook interno WA Web: `X-Webhook-Secret` contra
-  `WA_WEB_WEBHOOK_SECRET`.
-- **Multi-tenancy (III)**: `organization_id` NOT NULL; toda query de dominio
-  pasa por `scoped()` (`src/lib/db/tenant.ts`), incluida la ingesta omnicanal.
-- **Idempotencia (IV)**: dedup por id externo del canal (`wa_message_id` /
-  `externalMessageId`); estados monotónicos; seeds y migraciones re-ejecutables.
-- **Sandbox del Laboratorio**: las conversaciones `is_test` JAMÁS tocan un
-  canal real — el sender lanza excepción (no lo "arregles": es un guardrail).
-- **Foco (VIII)**: atención unificada de UN negocio. No broadcast, no scraping,
-  no builder visual de flujos.
+  jamás al cliente ni a logs. El token de WhatsApp solo muestra sus últimos 4.
+  Webhook interno WA Web: `X-Webhook-Secret` contra `WA_WEB_WEBHOOK_SECRET`.
+- **Multi-tenancy (III)**: `organization_id` NOT NULL en toda tabla de dominio;
+  toda query pasa por `scoped()` de `src/lib/db/tenant.ts`.
+- **Idempotencia (IV)**: webhooks dedup por `wa_message_id` / id externo UNIQUE; estados
+  monotónicos; seeds y migraciones re-ejecutables.
+- **Sandbox del Laboratorio**: las conversaciones `is_test` JAMÁS tocan la API
+  real ni el manager — el sender lanza excepción (no lo "arregles": es un guardrail). Lo
+  mismo vale para la agenda: una cita de prueba nunca llega a un conector.
+- **Módulos opcionales (015, 016)**: lo que no usa toda instancia va detrás de una
+  bandera de despliegue, apagado por defecto, con su superficie en 404 y la
+  migración aplicada igual. Nunca en una rama aparte.
 
 ## Variables de entorno
 
+`pnpm init-env` crea el `.env` con los secretos ya generados y `pnpm doctor`
+lo valida con el mismo esquema del arranque (`safeParseEnv` en
+`src/lib/env.ts`), prueba la base, `MEDIA_DIR` y el token de WhatsApp.
 Ver `.env.example` (cada una con guía inline). Las claves: `APP_BASE_URL`,
 `DATABASE_URL`, `BETTER_AUTH_SECRET`, `ENCRYPTION_KEY` (32 bytes base64),
-`META_WEBHOOK_VERIFY_TOKEN` (segmento secreto del webhook Cloud API),
-`META_APP_SECRET` (opcional, firma), `WA_WEB_MANAGER_URL` (default
-`http://127.0.0.1:3005`), `WA_WEB_WEBHOOK_SECRET` (webhook interno del
-manager), `WA_WEB_MANAGER_API_KEY` (API del manager), y para IA (cualquiera
-de las dos, o ambas):
+`META_WEBHOOK_VERIFY_TOKEN` (segmento secreto del webhook), `META_APP_SECRET`
+(opcional, firma), `WA_WEB_MANAGER_URL` (default `http://127.0.0.1:3005`),
+`WA_WEB_WEBHOOK_SECRET`, `WA_WEB_MANAGER_API_KEY`. La IA se configura desde la app
+(Ajustes → IA: proveedor, modelo y llave cifrada, con «Probar conexión»);
+las variables son el respaldo mientras no haya nada guardado ahí:
 
 ```bash
 GEMINI_API_KEY=...
@@ -115,54 +125,9 @@ Cuando una feature necesite una variable/credencial nueva: (1) agrégala a
 cómo obtenerla, (3) resume en el chat y sigue. `.env` está gitignored; para
 deploy, las vars van también en la plataforma de hosting (runtime, no build).
 
-## Definición de Hecho REFORZADA (obligatoria)
+## Convenciones de desarrollo
 
-"Typecheck + lint + build (+ tests)" es el piso, NO el techo. Una feature no
-está "Hecha" hasta correr el **self-test de COMPORTAMIENTO de punta a punta**
-y dejarlo verde: flujo real como usuario, resultado observable, y el camino
-infeliz degradando sin colgarse. Prohibido delegar la prueba al usuario.
-
-- Camino Cloud API / UI original: Playwright + mocks (`WA_MOCK_ENABLED=true`,
-  `META_GRAPH_BASE_URL` → wa-mock, `OPENROUTER_BASE_URL` → ai-mock).
-- Camino WhatsApp Web: sesión controlada, allowlist, anti-flood (Principio IX).
-  No dispares ráfagas contra números reales.
-
-Si algo depende de un LLM, todo turno tolera formato inesperado con extracción
-robusta + reintentos — un hipo del proveedor nunca tumba el turno. Al detectar
-un fallo: diagnostica, corrige y re-verifica tú mismo hasta verde.
-
-Gate técnico:
-
-```bash
-pnpm typecheck && pnpm lint && pnpm build && pnpm test
-```
-
-Guiones E2E por historia en `tests/e2e/*.md`. Parte de ellos ya están
-automatizados: con la app viva y los mocks encendidos, `pnpm test:e2e`
-(`scripts/e2e-selftest.mjs`) los conduce contra la app real y sale distinto de
-cero si algo falla. Al agregar una historia, extiende el arnés en vez de dejar
-solo el `.md`.
-
-## Modo Objetivo — Loop SDD
-
-Cuando el dueño da una META (no prompts paso a paso): Discover → Plan →
-Execute → Verify → Iterate, de forma autónoma, volviendo solo con el objetivo
-verificado en vivo o con un bloqueo real (decisión de producto, credenciales,
-acción irreversible/costosa). Agrupa TODAS las preguntas bloqueantes al inicio.
-El estado durable son los artefactos SDD en `specs/` (spec/plan/tasks) —
-manténlos al día. Invocable como `/loop-sdd <objetivo>`.
-
-## Memoria persistente
-
-Memoria de archivos en `memory/` (índice `memory/MEMORY.md`, cargado por
-sesión). Persiste decisiones, gotchas y correcciones; no dupliques lo que el
-repo ya registra. Los subagentes con `memory: project` usan
-`.claude/agent-memory/`.
-
-## Arquitectura de agentes
-
-1. **Orquestador** = la sesión principal de Claude Code (este CLAUDE.md + skill
-   `loop-sdd`).
-2. **Subagentes** (`.claude/agents/`): `deploy-ops` (deploy/logs/healthchecks,
-   no escribe código de app) · `public-site-builder` (páginas públicas/legales
-   y config de paneles externos).
+- **Commits atómicos**: un cambio lógico por commit, mensaje descriptivo en español o inglés según contexto (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`).
+- **TypeScript estricto**: nunca `any` sin justificación documentada.
+- **Validación en las fronteras**: Zod para toda entrada externa (body, query, headers, webhooks).
+- **Traducciones y textos de UI**: todo en español claro y conciso, tono profesional y directo.

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { apiError, parseBody, withAuth } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
+import { isTemplateLanguage } from "@/lib/template-languages";
 import {
   createTemplate,
   serializeTemplate,
@@ -24,9 +25,14 @@ export const GET = withAuth(async (session) => {
 
 const createSchema = z.object({
   name: z.string().trim().min(1).max(60),
-  language: z.string().trim().min(2).max(10),
+  // Solo los idiomas que Meta acepta: uno fuera de la lista es rechazo seguro.
+  language: z
+    .string()
+    .trim()
+    .refine(isTemplateLanguage, "Meta no acepta plantillas en ese idioma"),
   category: z.enum(["UTILITY", "MARKETING"]),
   body: z.string().trim().min(1).max(1024),
+  examples: z.array(z.string().trim().max(200)).max(10).optional(),
 });
 
 export const POST = withAuth(async (session, req: Request) => {

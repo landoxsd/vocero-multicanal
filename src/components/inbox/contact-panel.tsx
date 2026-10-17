@@ -2,19 +2,37 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Check, ChevronRight, Sparkles, UserRound } from "lucide-react";
+import {
+  AlertTriangle,
+  Cable,
+  Check,
+  ChevronRight,
+  Sparkles,
+  Trash2,
+  UserRound,
+} from "lucide-react";
+import {
+  externalAnswerLabel,
+  externalAnswering,
+  externalDown,
+  type BrainStatusDto,
+} from "@/lib/brain-status";
 import type {
+  AnuncioDto,
   ConversationDto,
   FichaDto,
   FichaValue,
   StageDto,
 } from "@/lib/types";
 import { cn, formatPhone } from "@/lib/utils";
+import { AnuncioOrigen } from "@/components/anuncio-origen";
 import { ContactAvatar } from "@/components/avatar";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { FichaPanel } from "@/components/ficha-panel";
 import { FichaTips } from "@/components/inbox/ficha-tips";
+import { DeleteConversationDialog } from "./delete-conversation-dialog";
 
 const HANDOFF_LABELS: Record<string, string> = {
   cliente: "El cliente pidió un humano",
@@ -28,6 +46,7 @@ export function ContactPanel({
   conversation,
   refreshKey = 0,
   onPatchConversation,
+  onDeleteConversation,
   onClose,
 }: {
   conversation: ConversationDto;
@@ -37,8 +56,11 @@ export function ContactPanel({
     aiEnabled?: boolean;
     reactivate?: boolean;
   }) => Promise<void>;
+  /** 026 — Ausente = quien mira no puede eliminar: no se le ofrece. */
+  onDeleteConversation?: (alsoContact: boolean) => Promise<string | null>;
   onClose: () => void;
 }) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [notes, setNotes] = useState("");
   const [ficha, setFicha] = useState<FichaDto>({});
   const [notesLoaded, setNotesLoaded] = useState(false);
@@ -46,45 +68,58 @@ export function ContactPanel({
   const [stages, setStages] = useState<StageDto[]>([]);
   const [currentStageId, setCurrentStageId] = useState<string | null>(null);
   const [leadId, setLeadId] = useState<string | null>(null);
-  // Estado global del agente: sin esto, el toggle "Respondiendo" mentiría
-  // cuando el agente aún no se ha configurado/encendido.
-  const [agentEnabled, setAgentEnabled] = useState(false);
-  const [aiConfigured, setAiConfigured] = useState(false);
+  // 018: de qué anuncio llegó; null si escribió por su cuenta.
+  const [anuncio, setAnuncio] = useState<AnuncioDto | null>(null);
+  // Quién responde (agente incluido, cerebro externo o los dos): sin esto, el
+  // toggle "Respondiendo" mentiría cuando el agente aún no se ha
+  // configurado/encendido, y pediría la clave de IA aunque conteste Nea.
+  const [brain, setBrain] = useState<BrainStatusDto | null>(null);
 
   const contactId = conversation.contact.id;
 
-  const agentReady = aiConfigured && agentEnabled;
+  const aiConfigured = brain?.embedded.configured ?? false;
+  const agentReady = brain?.embedded.answering ?? false;
+  // Hasta donde se sabe, contesta: activo y, si hay /health, en línea.
+  const externalActive = brain ? externalAnswering(brain) : false;
   // El control es la FUENTE DE VERDAD de la conversación: el agente in-process
   // y cualquier cerebro externo conectado por /api/bot/* respetan este flag,
   // así que el toggle opera siempre — `agentReady` solo matiza el texto.
   const aiActive = conversation.aiEnabled && !conversation.handoffAt;
 
+  // Aparte del resto: consultar el /health del cerebro externo puede tardar
+  // hasta 2 s, y eso no debe demorar la etapa ni la ficha.
+  const loadBrain = useCallback(async () => {
+    const b = await fetch("/api/agent/brain-status")
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+    if (b) setBrain(b);
+  }, []);
+
   // Carga inicial (incluye notas): se re-ejecuta al cambiar de contacto.
   const refetch = useCallback(async () => {
-    const [detail, stagesRes, agentRes] = await Promise.all([
+    void loadBrain();
+    const [detail, stagesRes] = await Promise.all([
       fetch(`/api/contacts/${contactId}`).then((r) => (r.ok ? r.json() : null)),
       fetch("/api/pipeline/stages").then((r) => (r.ok ? r.json() : null)),
-      fetch("/api/agent/profile").then((r) => (r.ok ? r.json() : null)),
-    ]).catch(() => [null, null, null]);
+    ]).catch(() => [null, null]);
     if (detail) {
       setNotes(detail.contact?.notes ?? "");
       setFicha(detail.contact?.ficha ?? {});
       setCurrentStageId(detail.stage?.id ?? null);
       setLeadId(detail.lead?.id ?? null);
+      setAnuncio(detail.anuncio ?? null);
     }
     if (stagesRes) setStages(stagesRes.stages);
-    setAgentEnabled(Boolean(agentRes?.profile?.enabled));
-    setAiConfigured(Boolean(agentRes?.aiConfigured));
     setNotesLoaded(true);
-  }, [contactId]);
+  }, [contactId, loadBrain]);
 
-  // Refetch en vivo (etapa/lead + estado del agente) SIN tocar las notas, para
+  // Refetch en vivo (etapa/lead + quién responde) SIN tocar las notas, para
   // no pisar lo que el operador esté escribiendo. Lo dispara el SSE.
   const refreshLive = useCallback(async () => {
-    const [detail, agentRes] = await Promise.all([
-      fetch(`/api/contacts/${contactId}`).then((r) => (r.ok ? r.json() : null)),
-      fetch("/api/agent/profile").then((r) => (r.ok ? r.json() : null)),
-    ]).catch(() => [null, null]);
+    void loadBrain();
+    const detail = await fetch(`/api/contacts/${contactId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
     if (detail) {
       // La ficha SÍ se refresca en vivo: el agente la va llenando mientras la
       // conversación ocurre, y verla aparecer sola es justo para lo que sirve.
@@ -92,15 +127,16 @@ export function ContactPanel({
       setFicha(detail.contact?.ficha ?? {});
       setCurrentStageId(detail.stage?.id ?? null);
       setLeadId(detail.lead?.id ?? null);
+      // La imagen del creativo se copia después de que entra el mensaje: este
+      // refetch en vivo es lo que la hace aparecer sin recargar.
+      setAnuncio(detail.anuncio ?? null);
     }
-    if (agentRes) {
-      setAgentEnabled(Boolean(agentRes.profile?.enabled));
-      setAiConfigured(Boolean(agentRes.aiConfigured));
-    }
-  }, [contactId]);
+  }, [contactId, loadBrain]);
 
   useEffect(() => {
     setNotesLoaded(false);
+    // Al cambiar de contacto no puede asomarse el anuncio del anterior.
+    setAnuncio(null);
     void refetch();
   }, [refetch]);
 
@@ -152,10 +188,10 @@ export function ContactPanel({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="sticky top-0 flex items-center justify-between border-b bg-background px-4 py-3">
-        <h3 className="text-[13px] font-[650] uppercase tracking-wide text-text-2">
-          Detalles
-        </h3>
+      {/* Por debajo de xl el panel flota (bg-popover, ver InboxClient): su
+          cabecera va del mismo tono para no dejar una franja más oscura. */}
+      <header className="sticky top-0 flex items-center justify-between border-b bg-background px-4 py-3 max-xl:bg-popover">
+        <h3 className="kicker text-text-2">Detalles</h3>
         <button
           onClick={onClose}
           aria-label="Ocultar panel"
@@ -175,7 +211,7 @@ export function ContactPanel({
               size="md"
             />
             <div className="min-w-0">
-              <p className="truncate text-sm font-[650]">
+              <p className="truncate text-sm font-bold tracking-tight">
                 {conversation.contact.name}
               </p>
               <p className="text-xs text-text-3">
@@ -204,7 +240,7 @@ export function ContactPanel({
             </div>
           )}
 
-          <div className="mt-3 rounded-md border bg-secondary/50 px-3 py-2.5">
+          <div className="mt-3 rounded-md border bg-subtle px-3 py-2.5">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-[13px] font-medium">IA en esta conversación</p>
@@ -213,35 +249,65 @@ export function ContactPanel({
                     ? "En pausa · atención humana"
                     : !conversation.aiEnabled
                       ? "En pausa"
-                      : agentReady
+                      : agentReady || externalActive
                         ? "Respondiendo"
                         : "Activada"}
                 </p>
               </div>
-              <button
-                role="switch"
-                aria-checked={aiActive}
-                aria-label="IA en esta conversación"
-                onClick={() => {
+              <Switch
+                size="sm"
+                checked={aiActive}
+                label="IA en esta conversación"
+                onCheckedChange={() => {
                   void onPatchConversation({
                     aiEnabled: !conversation.aiEnabled,
                   });
                 }}
-                className={cn(
-                  "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full px-0.5 transition-colors",
-                  aiActive ? "bg-brand" : "bg-border-strong"
-                )}
-              >
-                <span
-                  className={cn(
-                    "h-4 w-4 rounded-full bg-knob shadow-sm transition-transform",
-                    aiActive ? "translate-x-4" : "translate-x-0"
-                  )}
-                />
-              </button>
+              />
             </div>
 
-            {!agentReady && (
+            {brain?.warning === "doble_respuesta" ? (
+              <div className="mt-2.5 flex items-start gap-2 rounded-md border border-danger-soft bg-danger-tint p-2.5">
+                <AlertTriangle
+                  className="mt-0.5 h-3.5 w-3.5 shrink-0 text-danger-text"
+                  strokeWidth={1.7}
+                />
+                <div className="text-[11px] leading-relaxed text-danger-text">
+                  <p>
+                    <span className="font-semibold">Doble respuesta:</span> el agente
+                    incluido y tu cerebro externo contestan a la vez.
+                  </p>
+                  <Link
+                    href="/agent"
+                    className="mt-1 inline-block font-medium underline underline-offset-2"
+                  >
+                    Revisar en Agente →
+                  </Link>
+                </div>
+              </div>
+            ) : brain && !agentReady && externalActive ? (
+              <p className="mt-2 flex items-center gap-1.5 text-[11px] text-text-3">
+                <Cable className="h-3.5 w-3.5 shrink-0" strokeWidth={1.7} />
+                {externalAnswerLabel(brain)}
+              </p>
+            ) : brain && !agentReady && externalDown(brain) ? (
+              <div className="mt-2.5 flex items-start gap-2 rounded-md border border-warning-soft bg-warning-tint p-2.5">
+                <Cable
+                  className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning-text"
+                  strokeWidth={1.7}
+                />
+                <p className="text-[11px] leading-relaxed text-warning-text">
+                  Tu cerebro externo no está en línea: nadie contesta en automático
+                  hasta que vuelva.
+                  <Link
+                    href="/agent"
+                    className="ml-1 whitespace-nowrap font-medium text-brand-text underline underline-offset-2 hover:text-brand"
+                  >
+                    Ver en Agente →
+                  </Link>
+                </p>
+              </div>
+            ) : brain && !agentReady && (
               <div className="mt-2.5 flex items-start gap-2 rounded-md border border-warning-soft bg-warning-tint p-2.5">
                 <Sparkles
                   className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning-text"
@@ -250,27 +316,29 @@ export function ContactPanel({
                 <p className="text-[11px] leading-relaxed text-warning-text">
                   {aiConfigured
                     ? "El agente de Vocero no responde por su cuenta. Configura lo básico y enciéndelo (o conecta tu propio bot por la API)."
-                    : "Falta la clave de IA de la instancia (OPENROUTER_API_TOKEN) para que el agente responda, o conecta tu propio bot por la API."}
-                  {aiConfigured && (
-                    <Link
-                      href="/agent"
-                      className="ml-1 whitespace-nowrap font-medium text-brand-text underline underline-offset-2 hover:text-brand"
-                    >
-                      Configurar agente →
-                    </Link>
-                  )}
+                    : "Falta el proveedor de IA (o está pausado) para que el agente responda, o conecta tu propio bot por la API."}
+                  <Link
+                    href={aiConfigured ? "/agent" : "/settings/ai"}
+                    className="ml-1 whitespace-nowrap font-medium text-brand-text underline underline-offset-2 hover:text-brand"
+                  >
+                    {aiConfigured ? "Configurar agente →" : "Configurar la IA →"}
+                  </Link>
                 </p>
               </div>
             )}
           </div>
+
+          {anuncio && (
+            <div className="mt-3">
+              <AnuncioOrigen anuncio={anuncio} />
+            </div>
+          )}
         </section>
 
         {/* Stepper de etapa */}
         {stages.length > 0 && leadId && (
           <section className="border-b p-4">
-            <p className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-text-3">
-              Etapa del pipeline
-            </p>
+            <p className="kicker mb-3">Etapa del pipeline</p>
             <ol>
               {stages.map((s, i) => {
                 const done = currentIndex >= 0 && i < currentIndex;
@@ -324,10 +392,8 @@ export function ContactPanel({
         <FichaPanel ficha={ficha} onSave={saveFicha} />
 
         {/* Notas */}
-        <section className="p-4">
-          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-3">
-            Notas
-          </p>
+        <section className={cn("p-4", onDeleteConversation && "border-b")}>
+          <p className="kicker mb-2">Notas</p>
           <Textarea
             rows={5}
             placeholder="Notas internas sobre este contacto…"
@@ -345,7 +411,30 @@ export function ContactPanel({
             {savingNotes ? "Guardando…" : "Guardar notas"}
           </Button>
         </section>
+
+        {/* 026 — Al fondo y sin color de alarma: está a la mano de quien la
+            busca, no en el camino de quien solo vino a leer la ficha. */}
+        {onDeleteConversation && (
+          <section className="p-4">
+            <button
+              type="button"
+              onClick={() => setConfirmingDelete(true)}
+              className="flex items-center gap-1.5 rounded text-[13px] text-text-3 transition-colors hover:text-danger-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Trash2 className="h-3.5 w-3.5" strokeWidth={1.7} />
+              Eliminar conversación…
+            </button>
+          </section>
+        )}
       </div>
+
+      {confirmingDelete && onDeleteConversation && (
+        <DeleteConversationDialog
+          contactName={conversation.contact.name}
+          onCancel={() => setConfirmingDelete(false)}
+          onConfirm={onDeleteConversation}
+        />
+      )}
     </div>
   );
 }

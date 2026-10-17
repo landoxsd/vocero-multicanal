@@ -12,7 +12,8 @@ import {
 } from "lucide-react";
 import type { ConversationDto, TemplateDto } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { formatBytes, formatRemaining } from "./helpers";
+import { CHANNEL_LABEL } from "@/lib/channels";
+import { formatBytes, formatRemaining, formatRemainingLong } from "./helpers";
 import { TemplateSender } from "./template-sender";
 
 /** 008 — Panel secundario del clip: formulario de ubicación o contacto. */
@@ -197,7 +198,53 @@ export function Composer({
     onSent();
   }
 
-  if (!conversation.windowOpen) {
+  // 022 — TikTok no tiene plantillas ni otra forma de reabrir: con la ventana
+  // cerrada no hay nada que ofrecer, solo decir qué pasa y qué lo arregla.
+  if (!conversation.windowOpen && conversation.channel === "tiktok") {
+    return (
+      <div className="border-t bg-background px-[18px] py-3.5">
+        <div className="flex items-start gap-2 rounded-md border border-warning-soft bg-warning-tint p-3 text-sm text-warning-text">
+          <Clock3 className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.7} />
+          <div>
+            <p className="font-medium">La ventana de 48 horas de TikTok está cerrada.</p>
+            <p className="opacity-80">
+              TikTok solo deja contestar dentro de las 48 horas siguientes al
+              último mensaje del cliente, y no permite reabrir la conversación.
+              Podrás escribirle cuando vuelva a mandar un mensaje.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 024 — Instagram y Messenger no tienen plantillas. Pasadas 24 horas una
+  // persona todavía puede contestar (hasta 7 días, sigue abajo con su aviso);
+  // pasado ese plazo no hay nada que ofrecer salvo esperar al cliente.
+  const human = conversation.humanWindow;
+  const canal = CHANNEL_LABEL[conversation.channel];
+  if (!conversation.windowOpen && human && !human.open) {
+    return (
+      <div className="border-t bg-background px-[18px] py-3.5">
+        <div
+          data-window="closed"
+          className="flex items-start gap-2 rounded-md border border-warning-soft bg-warning-tint p-3 text-sm text-warning-text"
+        >
+          <Clock3 className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.7} />
+          <div>
+            <p className="font-medium">La ventana de atención de {canal} está cerrada.</p>
+            <p className="opacity-80">
+              {canal} deja contestar hasta 7 días después del último mensaje
+              del cliente, y no tiene plantillas para reabrir la conversación.
+              Podrás escribirle cuando vuelva a mandar un mensaje.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!conversation.windowOpen && !human) {
     return (
       <div className="border-t bg-background px-[18px] py-3.5">
         <div className="mb-3 flex items-start gap-2 rounded-md border border-warning-soft bg-warning-tint p-3 text-sm text-warning-text">
@@ -218,14 +265,29 @@ export function Composer({
 
   const canSubmit = file !== null || text.trim().length > 0;
 
+  const soloPersona = !conversation.windowOpen && Boolean(human?.open);
+
   return (
     <div className="border-t bg-background px-[18px] pb-3.5 pt-3">
+      {soloPersona && (
+        <div
+          data-window="human"
+          className="mb-2.5 flex items-start gap-2 rounded-md border border-info-soft bg-info-tint p-2.5 text-xs text-info-text"
+        >
+          <Clock3 className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.7} />
+          <p>
+            <span className="font-semibold">Solo puede contestar una persona.</span>{" "}
+            Pasaron más de 24 horas desde el último mensaje del cliente: {canal}{" "}
+            te deja responder a ti hasta 7 días, al agente ya no.
+          </p>
+        </div>
+      )}
       {templates.length > 0 && !file && panel === null && (
         <div className="mb-2.5 flex flex-wrap gap-1.5">
           {templates.slice(0, 4).map((t) => (
             <button
               key={t.id}
-              className="rounded-full border bg-secondary px-3 py-1 text-xs font-medium text-text-2 transition-colors hover:border-brand-soft hover:bg-brand-tint hover:text-brand-text"
+              className="rounded-full border border-border-strong bg-background px-3 py-1 text-xs font-semibold text-text-2 transition-colors hover:border-brand hover:bg-brand-tint hover:text-brand-text"
               onClick={() => {
                 const firstName = conversation.contact.name.split(" ")[0] ?? "";
                 setText(t.body.replace(/\{\{\s*1\s*\}\}/g, firstName));
@@ -241,7 +303,7 @@ export function Composer({
       )}
 
       {file && (
-        <div className="mb-2.5 flex items-center gap-2.5 rounded-md border bg-secondary/50 p-2.5">
+        <div className="mb-2.5 flex items-center gap-2.5 rounded-md border bg-subtle p-2.5">
           {filePreview ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -261,7 +323,7 @@ export function Composer({
           <button
             onClick={() => pickFile(null)}
             aria-label="Quitar adjunto"
-            className="rounded p-1 text-text-3 hover:bg-secondary hover:text-text-1"
+            className="rounded p-1 text-text-3 hover:bg-secondary hover:text-foreground"
           >
             <X className="h-4 w-4" strokeWidth={1.7} />
           </button>
@@ -269,14 +331,14 @@ export function Composer({
       )}
 
       {panel === "location" && (
-        <div className="mb-2.5 flex flex-wrap items-end gap-2 rounded-md border bg-secondary/50 p-2.5">
+        <div className="mb-2.5 flex flex-wrap items-end gap-2 rounded-md border bg-subtle p-2.5">
           <label className="min-w-0 flex-1 text-xs text-text-2">
             Coordenadas o enlace de Google Maps
             <input
               value={coordsRaw}
               onChange={(e) => setCoordsRaw(e.target.value)}
               placeholder="21.019, -101.257"
-              className="mt-1 w-full rounded border bg-background px-2 py-1.5 text-sm outline-none focus:border-brand"
+              className="mt-1 w-full rounded-md border border-border-strong bg-background px-2.5 py-1.5 text-sm outline-none transition-[border-color,box-shadow] focus:border-brand focus:ring-[3px] focus:ring-brand-soft"
             />
           </label>
           <label className="min-w-0 flex-1 text-xs text-text-2">
@@ -285,13 +347,13 @@ export function Composer({
               value={placeName}
               onChange={(e) => setPlaceName(e.target.value)}
               placeholder="Oficina AISHIA"
-              className="mt-1 w-full rounded border bg-background px-2 py-1.5 text-sm outline-none focus:border-brand"
+              className="mt-1 w-full rounded-md border border-border-strong bg-background px-2.5 py-1.5 text-sm outline-none transition-[border-color,box-shadow] focus:border-brand focus:ring-[3px] focus:ring-brand-soft"
             />
           </label>
           <button
             onClick={() => void submitLocation()}
             disabled={sending}
-            className="rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-brand-fg hover:bg-brand-hover disabled:opacity-40"
+            className="rounded-full bg-brand px-3.5 py-1.5 text-sm font-semibold text-brand-fg shadow-sm hover:bg-brand-hover disabled:opacity-40"
           >
             Enviar ubicación
           </button>
@@ -306,14 +368,14 @@ export function Composer({
       )}
 
       {panel === "contact" && (
-        <div className="mb-2.5 flex flex-wrap items-end gap-2 rounded-md border bg-secondary/50 p-2.5">
+        <div className="mb-2.5 flex flex-wrap items-end gap-2 rounded-md border bg-subtle p-2.5">
           <label className="min-w-0 flex-1 text-xs text-text-2">
             Nombre
             <input
               value={contactName}
               onChange={(e) => setContactName(e.target.value)}
               placeholder="Xavier Pérez"
-              className="mt-1 w-full rounded border bg-background px-2 py-1.5 text-sm outline-none focus:border-brand"
+              className="mt-1 w-full rounded-md border border-border-strong bg-background px-2.5 py-1.5 text-sm outline-none transition-[border-color,box-shadow] focus:border-brand focus:ring-[3px] focus:ring-brand-soft"
             />
           </label>
           <label className="min-w-0 flex-1 text-xs text-text-2">
@@ -322,13 +384,13 @@ export function Composer({
               value={contactPhone}
               onChange={(e) => setContactPhone(e.target.value)}
               placeholder="+52 462 123 4567"
-              className="mt-1 w-full rounded border bg-background px-2 py-1.5 text-sm outline-none focus:border-brand"
+              className="mt-1 w-full rounded-md border border-border-strong bg-background px-2.5 py-1.5 text-sm outline-none transition-[border-color,box-shadow] focus:border-brand focus:ring-[3px] focus:ring-brand-soft"
             />
           </label>
           <button
             onClick={() => void submitContact()}
             disabled={sending}
-            className="rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-brand-fg hover:bg-brand-hover disabled:opacity-40"
+            className="rounded-full bg-brand px-3.5 py-1.5 text-sm font-semibold text-brand-fg shadow-sm hover:bg-brand-hover disabled:opacity-40"
           >
             Enviar contacto
           </button>
@@ -342,45 +404,55 @@ export function Composer({
         </div>
       )}
 
-      <div className="flex items-end gap-2 rounded-md border bg-background px-3 py-2 transition-shadow focus-within:border-brand focus-within:ring-[3px] focus-within:ring-brand-soft">
+      {/* La caja de escritura en píldora, como la del mockup de la landing */}
+      <div className="flex items-end gap-2 rounded-[23px] border border-border-strong bg-background py-1.5 pl-2 pr-1.5 shadow-sm transition-[border-color,box-shadow] focus-within:border-brand focus-within:ring-[3px] focus-within:ring-brand-soft">
         <input
           ref={fileRef}
           type="file"
           className="hidden"
           onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
         />
-        <div className="flex shrink-0 items-center gap-0.5">
-          <button
-            onClick={() => fileRef.current?.click()}
-            aria-label="Adjuntar archivo"
-            title="Adjuntar imagen, video, audio o documento"
-            className="rounded p-1.5 text-text-3 transition-colors hover:bg-secondary hover:text-text-1"
-          >
-            <Paperclip className="h-[18px] w-[18px]" strokeWidth={1.7} />
-          </button>
-          <button
-            onClick={() => setPanel(panel === "location" ? null : "location")}
-            aria-label="Enviar ubicación"
-            title="Enviar ubicación"
-            className={cn(
-              "rounded p-1.5 text-text-3 transition-colors hover:bg-secondary hover:text-text-1",
-              panel === "location" && "bg-secondary text-brand"
+        {/* 028: solo lo que el canal puede mandar; en las redes, la caja sola. */}
+        {(conversation.composer.media || conversation.composer.structured) && (
+          <div className="flex shrink-0 items-center gap-0.5">
+            {conversation.composer.media && (
+              <button
+                onClick={() => fileRef.current?.click()}
+                aria-label="Adjuntar archivo"
+                title="Adjuntar imagen, video, audio o documento"
+                className="rounded p-1.5 text-text-3 transition-colors hover:bg-secondary hover:text-foreground"
+              >
+                <Paperclip className="h-[18px] w-[18px]" strokeWidth={1.7} />
+              </button>
             )}
-          >
-            <MapPin className="h-[18px] w-[18px]" strokeWidth={1.7} />
-          </button>
-          <button
-            onClick={() => setPanel(panel === "contact" ? null : "contact")}
-            aria-label="Compartir contacto"
-            title="Compartir contacto"
-            className={cn(
-              "rounded p-1.5 text-text-3 transition-colors hover:bg-secondary hover:text-text-1",
-              panel === "contact" && "bg-secondary text-brand"
+            {conversation.composer.structured && (
+              <>
+                <button
+                  onClick={() => setPanel(panel === "location" ? null : "location")}
+                  aria-label="Enviar ubicación"
+                  title="Enviar ubicación"
+                  className={cn(
+                    "rounded p-1.5 text-text-3 transition-colors hover:bg-secondary hover:text-foreground",
+                    panel === "location" && "bg-secondary text-brand"
+                  )}
+                >
+                  <MapPin className="h-[18px] w-[18px]" strokeWidth={1.7} />
+                </button>
+                <button
+                  onClick={() => setPanel(panel === "contact" ? null : "contact")}
+                  aria-label="Compartir contacto"
+                  title="Compartir contacto"
+                  className={cn(
+                    "rounded p-1.5 text-text-3 transition-colors hover:bg-secondary hover:text-foreground",
+                    panel === "contact" && "bg-secondary text-brand"
+                  )}
+                >
+                  <UserRound className="h-[18px] w-[18px]" strokeWidth={1.7} />
+                </button>
+              </>
             )}
-          >
-            <UserRound className="h-[18px] w-[18px]" strokeWidth={1.7} />
-          </button>
-        </div>
+          </div>
+        )}
         <textarea
           ref={taRef}
           placeholder={file ? "Pie del adjunto (opcional)…" : "Escribe una respuesta…"}
@@ -396,14 +468,14 @@ export function Composer({
               void submit();
             }
           }}
-          className="max-h-[120px] w-full resize-none bg-transparent text-sm leading-relaxed outline-none placeholder:text-text-3"
+          className="max-h-[120px] w-full resize-none self-center bg-transparent py-1 text-sm leading-relaxed outline-none placeholder:text-text-3"
         />
         <button
           onClick={() => void submit()}
           disabled={sending || !canSubmit}
           aria-label="Enviar"
           className={cn(
-            "flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[9px] bg-brand text-brand-fg transition-opacity hover:bg-brand-hover",
+            "flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-full bg-brand text-brand-fg transition-[opacity,background-color] hover:bg-brand-hover",
             (sending || !canSubmit) && "opacity-40"
           )}
         >
@@ -412,11 +484,13 @@ export function Composer({
       </div>
       <div className="mt-1.5 flex items-center justify-between">
         {error ? <p className="text-xs text-destructive">{error}</p> : <span />}
-        {conversation.windowRemainingMs > 0 && conversation.windowRemainingMs < 24 * 60 * 60 * 1000 && (
-          <p className="text-[11px] text-text-3">
-            Ventana abierta · quedan {formatRemaining(conversation.windowRemainingMs)}
-          </p>
-        )}
+        <p className="font-mono text-[10.5px] tracking-[0.04em] text-text-3">
+          {soloPersona
+            ? `Ventana humana · quedan ${formatRemainingLong(human!.remainingMs)}`
+            : conversation.windowRemainingMs > 0 && conversation.windowRemainingMs < 24 * 60 * 60 * 1000
+              ? `Ventana abierta · quedan ${formatRemaining(conversation.windowRemainingMs)}`
+              : "Ventana abierta"}
+        </p>
       </div>
     </div>
   );

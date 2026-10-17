@@ -165,50 +165,58 @@ export function StartConversation({
         </div>
       ) : (
         <div className="space-y-2">
-          <select
-            value={templateId}
-            onChange={(e) => {
-              setTemplateId(e.target.value);
-              setVars([]);
-            }}
-            aria-label="Plantilla para iniciar"
-            className="h-9 w-full rounded-md border border-input bg-card px-2 text-sm"
-          >
-            {templates?.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name} ({t.language})
-              </option>
-            ))}
-          </select>
+          {templates === null ? (
+            <p className="text-xs text-text-3">Cargando plantillas…</p>
+          ) : templates.length === 0 ? (
+            <p className="text-xs text-muted-foreground">Sin plantillas aprobadas.</p>
+          ) : (
+            <>
+              <select
+                value={templateId}
+                onChange={(e) => {
+                  setTemplateId(e.target.value);
+                  setVars([]);
+                }}
+                aria-label="Plantilla para iniciar"
+                className="h-9 w-full rounded-md border border-input bg-card px-2 text-sm"
+              >
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name} ({t.language})
+                  </option>
+                ))}
+              </select>
 
-          {elegida && (
-            <p className="rounded-md border bg-secondary/40 px-3 py-2 text-[12px] text-text-2">
-              {elegida.body}
-            </p>
+              {elegida && (
+                <p className="rounded-md border bg-subtle px-3 py-2 text-[12px] text-text-2">
+                  {elegida.body}
+                </p>
+              )}
+
+              {Array.from({ length: nVars }, (_, i) => (
+                <Input
+                  key={i}
+                  value={vars[i] ?? ""}
+                  aria-label={`Valor de la variable ${i + 1}`}
+                  placeholder={`Valor de {{${i + 1}}}`}
+                  onChange={(e) => {
+                    const next = [...vars];
+                    next[i] = e.target.value;
+                    setVars(next);
+                  }}
+                />
+              ))}
+
+              <Button
+                size="sm"
+                disabled={enviando || !templateId || vars.slice(0, nVars).some((v) => !v?.trim())}
+                onClick={() => void enviarPlantilla()}
+              >
+                <Send className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.7} />
+                {enviando ? "Enviando…" : "Iniciar con plantilla"}
+              </Button>
+            </>
           )}
-
-          {Array.from({ length: nVars }, (_, i) => (
-            <Input
-              key={i}
-              value={vars[i] ?? ""}
-              aria-label={`Valor de la variable ${i + 1}`}
-              placeholder={`Valor de {{${i + 1}}}`}
-              onChange={(e) => {
-                const next = [...vars];
-                next[i] = e.target.value;
-                setVars(next);
-              }}
-            />
-          ))}
-
-          <Button
-            size="sm"
-            disabled={enviando || !templateId || vars.slice(0, nVars).some((v) => !v?.trim())}
-            onClick={() => void enviarPlantilla()}
-          >
-            <Send className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.7} />
-            {enviando ? "Enviando…" : "Iniciar con plantilla"}
-          </Button>
         </div>
       )}
 

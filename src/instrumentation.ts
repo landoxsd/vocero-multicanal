@@ -5,10 +5,17 @@
  */
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME === "nodejs") {
-    const { cleanupOrphanRuns, startWaWebSocket } = await import(
-      "./instrumentation-node"
-    );
+    const {
+      checkMediaDir,
+      cleanupOrphanRuns,
+      encryptLegacySecrets,
+      resumeDispatch,
+      startWaWebSocket,
+    } = await import("./instrumentation-node");
+    await checkMediaDir();
     await cleanupOrphanRuns();
+    await encryptLegacySecrets();
+    resumeDispatch();
     startWaWebSocket();
   }
 }

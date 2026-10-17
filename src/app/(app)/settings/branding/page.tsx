@@ -2,6 +2,8 @@ import { BrandingClient } from "@/components/settings/branding-client";
 import { FaviconCard } from "@/components/settings/favicon-card";
 import { getBranding } from "@/server/branding";
 import { getSessionOrNull } from "@/lib/auth/session";
+import { enabledChannels } from "@/server/channels/enabled";
+import { navKicker } from "@/lib/channels";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +16,12 @@ export default async function BrandingSettingsPage() {
 
   return (
     <div className="max-w-2xl space-y-6">
-      <BrandingClient />
+      {/* El logo viaja como prop: al subirlo o quitarlo, FaviconCard refresca
+          la página y la vista previa de la marca lo sigue sin recargar. */}
+      <BrandingClient
+        favicon={branding.favicon}
+        kicker={navKicker([...enabledChannels()])}
+      />
       <FaviconCard branding={branding} />
     </div>
   );

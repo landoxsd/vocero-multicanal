@@ -10,21 +10,60 @@
  * haría que una instalación fuera de su país sumara mal sin avisar.
  */
 
-/** Monedas ISO-4217 razonables para un CRM de WhatsApp hispanohablante. */
-export const CURRENCIES = [
-  "MXN",
-  "USD",
-  "EUR",
-  "COP",
-  "ARS",
-  "CLP",
-  "PEN",
-  "GTQ",
-  "DOP",
-  "BRL",
+/**
+ * Monedas ISO-4217 que puede elegir un negocio, agrupadas para el selector.
+ *
+ * Cubre México, Centro y Sudamérica, el Caribe hispano, EE. UU. y España, y
+ * los países que los rodean, para que una instalación en otro país no tenga
+ * que esperar a que alguien añada su moneda. Los países dolarizados (Ecuador,
+ * El Salvador, Puerto Rico) usan USD, y Panamá puede elegir USD o balboa.
+ * Añadir una es añadir un renglón: nada en la BD restringe el código.
+ */
+export const CURRENCY_OPTIONS = [
+  { code: "MXN", name: "Peso mexicano", where: "México", group: "latam" },
+  { code: "GTQ", name: "Quetzal", where: "Guatemala", group: "latam" },
+  { code: "HNL", name: "Lempira", where: "Honduras", group: "latam" },
+  { code: "NIO", name: "Córdoba", where: "Nicaragua", group: "latam" },
+  { code: "CRC", name: "Colón costarricense", where: "Costa Rica", group: "latam" },
+  { code: "PAB", name: "Balboa", where: "Panamá", group: "latam" },
+  { code: "BZD", name: "Dólar beliceño", where: "Belice", group: "latam" },
+  { code: "DOP", name: "Peso dominicano", where: "República Dominicana", group: "latam" },
+  { code: "CUP", name: "Peso cubano", where: "Cuba", group: "latam" },
+  { code: "HTG", name: "Gourde", where: "Haití", group: "latam" },
+  { code: "JMD", name: "Dólar jamaiquino", where: "Jamaica", group: "latam" },
+  { code: "TTD", name: "Dólar de Trinidad y Tobago", where: "Trinidad y Tobago", group: "latam" },
+  { code: "COP", name: "Peso colombiano", where: "Colombia", group: "latam" },
+  { code: "VES", name: "Bolívar", where: "Venezuela", group: "latam" },
+  { code: "PEN", name: "Sol", where: "Perú", group: "latam" },
+  { code: "BOB", name: "Boliviano", where: "Bolivia", group: "latam" },
+  { code: "CLP", name: "Peso chileno", where: "Chile", group: "latam" },
+  { code: "ARS", name: "Peso argentino", where: "Argentina", group: "latam" },
+  { code: "UYU", name: "Peso uruguayo", where: "Uruguay", group: "latam" },
+  { code: "PYG", name: "Guaraní", where: "Paraguay", group: "latam" },
+  { code: "BRL", name: "Real", where: "Brasil", group: "latam" },
+  { code: "USD", name: "Dólar estadounidense", where: "EE. UU., Ecuador, El Salvador, Puerto Rico, Panamá", group: "norte" },
+  { code: "CAD", name: "Dólar canadiense", where: "Canadá", group: "norte" },
+  { code: "EUR", name: "Euro", where: "España y zona euro", group: "europa" },
+  { code: "GBP", name: "Libra esterlina", where: "Reino Unido", group: "europa" },
+  { code: "CHF", name: "Franco suizo", where: "Suiza", group: "europa" },
+  { code: "XAF", name: "Franco CFA", where: "Guinea Ecuatorial", group: "otras" },
+  { code: "AUD", name: "Dólar australiano", where: "Australia", group: "otras" },
+  { code: "JPY", name: "Yen", where: "Japón", group: "otras" },
 ] as const;
 
-export type Currency = (typeof CURRENCIES)[number];
+export const CURRENCY_GROUPS = [
+  { id: "latam", label: "Latinoamérica y el Caribe" },
+  { id: "norte", label: "Norteamérica" },
+  { id: "europa", label: "Europa" },
+  { id: "otras", label: "Otras" },
+] as const;
+
+export type Currency = (typeof CURRENCY_OPTIONS)[number]["code"];
+
+export const CURRENCIES = CURRENCY_OPTIONS.map((c) => c.code) as [
+  Currency,
+  ...Currency[],
+];
 
 export const DEFAULT_CURRENCY: Currency = "MXN";
 

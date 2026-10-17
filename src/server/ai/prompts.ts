@@ -19,6 +19,15 @@ export function renderKb(entries: KbEntry[]): string {
 }
 
 /**
+ * 029 — Va al final de los mensajes del turno, después del historial. Las
+ * respuestas anteriores del agente llegan como texto plano, y con ellas a la
+ * vista el modelo contestaba en texto plano: cada turno después del primero
+ * gastaba un reintento para conseguir el JSON.
+ */
+export const TURN_FORMAT_REMINDER =
+  'Responde ahora con UN objeto JSON de acción (por ejemplo {"action":"reply","text":"..."}), aunque tus mensajes anteriores aparezcan como texto plano.';
+
+/**
  * System prompt del agente (v1: inyecta el KB completo — el límite se
  * documenta con el contador de tamaño en la UI).
  */
@@ -26,9 +35,27 @@ export function buildAgentSystemPrompt(input: {
   profile: AgentProfile;
   kb: KbEntry[];
   stages: { name: string }[];
+  /**
+   * 015 — ¿esta instancia tiene agenda? Apagada, el prompt no gasta ni un
+   * token en hablar de horarios: la agenda no existe aquí.
+   */
+  agenda?: boolean;
 }): string {
   const { profile } = input;
   const stageNames = input.stages.map((s) => s.name).join(" | ");
+  const agendaLines = input.agenda
+    ? [
+        '- {"action":"offer_slots","reply":"..."} — ofrecer horarios para agendar (reply es solo la frase de entrada; los horarios los pone el sistema).',
+        '- {"action":"book_slot","startUtc":"<uno de los horarios que el sistema ofreció, en ISO UTC>","reply":"..."} — agendar el horario que el cliente eligió.',
+      ]
+    : [];
+  const agendaRules = input.agenda
+    ? [
+        "- NUNCA escribas tú los horarios ni los inventes: usa offer_slots y el sistema pega los reales.",
+        "- book_slot solo acepta un horario que el sistema ofreció antes en ESTA conversación. Si el cliente pide otro, vuelve a ofrecer con offer_slots.",
+        "- Si el cliente quiere CANCELAR una cita → handoff: esa decisión no es tuya.",
+      ]
+    : [];
   return [
     `Eres "${profile.name}", el asistente de WhatsApp de este negocio. Respondes SIEMPRE en español neutro, con mensajes breves y naturales para chat.`,
     profile.tone ? `Tono: ${profile.tone}` : null,
@@ -41,15 +68,19 @@ export function buildAgentSystemPrompt(input: {
     `Etapas del pipeline disponibles: ${stageNames}`,
     [
       "En cada turno respondes ÚNICAMENTE un objeto JSON con UNA acción:",
-      '- {"action":"none"} — no responder nada.',
+      // 029 — Sin condición, el modelo callaba ante «Hola prueba 1» (8 de 8).
+      '- {"action":"none"} — no enviar nada. SOLO cuando el último mensaje del cliente cierra la conversación sin pedir nada («ok», «gracias», un emoji) y lo que preguntó ya tiene respuesta.',
       '- {"action":"reply","text":"..."} — responder al cliente.',
-      '- {"action":"update_lead","note":"...","reply":"..."} — guardar una nota del lead (reply opcional).',
-      '- {"action":"move_stage","stage":"<nombre exacto de etapa>","reply":"..."} — mover el lead (reply opcional).',
+      '- {"action":"update_lead","note":"...","reply":"..."} — guardar una nota del lead (si el cliente espera respuesta, incluye reply).',
+      '- {"action":"move_stage","stage":"<nombre exacto de etapa>","reply":"..."} — mover el lead (si el cliente espera respuesta, incluye reply).',
       '- {"action":"handoff","reason":"...","farewell":"..."} — escalar a un humano (farewell opcional para despedirte).',
+      ...agendaLines,
       "Reglas duras:",
+      "- Todo mensaje del cliente que no sea un cierre recibe respuesta: un saludo, un mensaje corto, raro o confuso, o un «hola, prueba» se contestan (saluda y ofrece ayuda). Nunca supongas que es una prueba o un error.",
       "- Si el cliente pide hablar con una persona/humano/asesor → handoff.",
       "- Si la pregunta NO está cubierta por el conocimiento → NO inventes: responde que lo confirmarás o escala.",
       "- Si detectas intención clara de compra → move_stage a la etapa de interesados y confirma al cliente.",
+      ...agendaRules,
       "- JSON puro, sin markdown ni texto adicional.",
     ].join("\n"),
   ]

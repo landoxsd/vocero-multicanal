@@ -112,6 +112,19 @@ export async function saveCredentials(input: {
     });
 }
 
+/**
+ * Desconectar el número: borra las credenciales cifradas de la organización.
+ *
+ * No toca conversaciones, contactos ni leads — son de la organización, no de
+ * la conexión. Idempotente: sin fila, no hay nada que borrar.
+ */
+export async function desconectarCanal(organizationId: string): Promise<void> {
+  const db = getDb();
+  await db
+    .delete(schema.metaCredentials)
+    .where(scoped(schema.metaCredentials.organizationId, organizationId));
+}
+
 /** Marca la conexión como vencida (token inválido detectado en runtime). */
 export async function markReconnectRequired(
   organizationId: string

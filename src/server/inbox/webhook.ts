@@ -58,6 +58,46 @@ export type WebhookLocation = {
   address?: string;
 };
 
+/**
+ * 016 — Objeto `referral`: SOLO llega cuando el mensaje viene de un anuncio
+ * Click-to-WhatsApp, y normalmente solo en el PRIMER mensaje de la
+ * conversación. Su `ctwa_clid` es lo que permite devolverle a Meta el
+ * desenlace de ese lead; el resto son datos del creativo.
+ */
+export type WebhookReferral = {
+  source_url?: string;
+  source_id?: string;
+  source_type?: string;
+  headline?: string;
+  body?: string;
+  media_type?: string;
+  image_url?: string;
+  video_url?: string;
+  thumbnail_url?: string;
+  ctwa_clid?: string;
+};
+
+/**
+ * #78 — Respuesta a un botón de respuesta rápida de una PLANTILLA
+ * (`type: "button"`): `text` es el rótulo que vio el cliente y `payload` el
+ * que se definió al crear la plantilla (en la práctica, el mismo rótulo).
+ */
+export type WebhookButtonReply = {
+  text?: string;
+  payload?: string;
+};
+
+/**
+ * #78 — Respuesta a un mensaje INTERACTIVO (`type: "interactive"`): un botón
+ * (`button_reply`) o una fila de lista (`list_reply`). Meta pone en `type`
+ * cuál de los dos viene.
+ */
+export type WebhookInteractiveReply = {
+  type?: string;
+  button_reply?: { id?: string; title?: string };
+  list_reply?: { id?: string; title?: string; description?: string };
+};
+
 export type WebhookMessage = {
   /** Teléfono del remitente. OPCIONAL desde la migración de Meta a BSUID (003). */
   from?: string;
@@ -76,6 +116,14 @@ export type WebhookMessage = {
   sticker?: WebhookMediaPayload;
   location?: WebhookLocation;
   contacts?: unknown[];
+  /** #78: respuesta a un botón de plantilla. */
+  button?: WebhookButtonReply;
+  /** #78: respuesta a un botón o a una lista de un mensaje interactivo. */
+  interactive?: WebhookInteractiveReply;
+  /** El mensaje al que responde (botones, citas): `id` es su wa_message_id. */
+  context?: { from?: string; id?: string };
+  /** 016: origen del anuncio, cuando la conversación nació de uno. */
+  referral?: WebhookReferral;
 };
 
 export type WebhookStatus = {

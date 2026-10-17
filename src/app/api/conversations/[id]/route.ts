@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { apiError, parseBody, withAuth } from "@/lib/api";
+import { canConfigure } from "@/lib/auth/roles";
+import { newId } from "@/lib/db/ids";
+import { construirEventoOlvido } from "@/server/brains/contract";
+import { avisarOlvido, type ResultadoOlvido } from "@/server/brains/deliver";
 import { publish } from "@/server/events/bus";
+import { eliminarConversacion } from "@/server/inbox/eliminar";
 import { serializeConversation, getConversation, updateConversation } from "@/server/inbox/queries";
 
 export const dynamic = "force-dynamic";
@@ -25,15 +30,16 @@ export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
   if (row) {
     const isUnrestricted =
       (row.channelAccount && row.channelAccount.provider !== "whatsapp_cloud") ||
-      row.conversation.platform === "instagram" ||
-      row.conversation.platform === "mercadolibre" ||
-      row.conversation.platform === "facebook";
+      row.conversation.platform === "mercadolibre";
     const dto = serializeConversation(
       row.conversation,
       row.contact,
       null,
       null,
-      Boolean(isUnrestricted)
+      row.anuncio,
+      Boolean(isUnrestricted),
+      null,
+      row.channelAccount?.name ?? null
     );
     publish(session.organizationId, {
       type: "conversation.updated",
@@ -42,4 +48,72 @@ export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
     return Response.json({ conversation: dto });
   }
   return Response.json({ conversation: null });
+});
+
+const FECHA_DE_CITA = new Intl.DateTimeFormat("es-MX", { dateStyle: "long" });
+
+/**
+ * 026 — Elimina la conversación y le pide al cerebro que la olvide.
+ *
+ * `?contacto=1` se lleva además a la persona: contacto, lead y citas pasadas.
+ * Es irreversible en los dos casos, y por eso exige rol de configuración
+ * (propietario o administrador) y no solo operar la bandeja.
+ */
+export const DELETE = withAuth(async (session, req: Request, ctx: Params) => {
+  if (!canConfigure(session.role)) {
+    return apiError(
+      403,
+      "forbidden",
+      "Solo quien administra el negocio puede eliminar conversaciones"
+    );
+  }
+  const { id } = await ctx.params;
+  const alcance =
+    new URL(req.url).searchParams.get("contacto") === "1" ? "contacto" : "hilo";
+
+  const resultado = await eliminarConversacion(session.organizationId, id, alcance);
+  if (!resultado.ok) {
+    if (resultado.motivo === "cita_pendiente") {
+      return apiError(
+        409,
+        "cita_pendiente",
+        `Tiene una cita agendada para el ${FECHA_DE_CITA.format(resultado.cuando)}. Cancélala en Citas antes de eliminar.`
+      );
+    }
+    return apiError(404, "not_found", "Conversación no encontrada");
+  }
+
+  // Irreversible y sin papelera: que al menos quede quién y cuándo. Solo ids.
+  console.info(
+    `[bandeja] ${session.userId} eliminó ${id} (${alcance}) en ${session.organizationId}`
+  );
+
+  // El aviso va DESPUÉS del borrado y no lo condiciona: lo que se pidió ya
+  // pasó, y un cerebro caído no puede dejar la conversación en la bandeja.
+  let agente: ResultadoOlvido = "no_aplica";
+  const deletedAt = new Date();
+  for (const conversacion of resultado.conversaciones) {
+    const aviso = await avisarOlvido(
+      construirEventoOlvido({
+        eventId: newId("olvido"),
+        organization: resultado.organization,
+        conversation: conversacion,
+        contact: resultado.contact,
+        deletedAt,
+      })
+    );
+    if (aviso === "sin_confirmar" || agente === "no_aplica") agente = aviso;
+  }
+
+  for (const conversacion of resultado.conversaciones) {
+    publish(session.organizationId, {
+      type: "conversation.deleted",
+      data: {
+        conversationId: conversacion.id,
+        contactId: resultado.contact.id,
+        contactDeleted: alcance === "contacto",
+      },
+    });
+  }
+  return Response.json({ ok: true, alcance, agente });
 });

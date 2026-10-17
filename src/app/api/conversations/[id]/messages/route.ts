@@ -1,3 +1,7 @@
+import {
+  MAX_TEXT_CHARS_ANY_CHANNEL,
+  TEXT_TOO_LONG_ANY_CHANNEL,
+} from "@/server/channels/capabilities";
 import { z } from "zod";
 import { apiError, parseBody, withAuth } from "@/lib/api";
 import { getConversation, listMessages } from "@/server/inbox/queries";
@@ -50,7 +54,9 @@ export const GET = withAuth(async (session, req: Request, ctx: Params) => {
 const sendSchema = z.union([
   z.object({
     type: z.literal("text").optional(),
-    text: z.string().trim().min(1).max(4096),
+    // 022: el tope de aquí es el del canal que más admite; el de cada
+    // canal lo comprueba el envío (`text_too_long`).
+    text: z.string().trim().min(1).max(MAX_TEXT_CHARS_ANY_CHANNEL, TEXT_TOO_LONG_ANY_CHANNEL),
   }),
   z.object({
     type: z.literal("location"),
@@ -80,6 +86,8 @@ const SEND_ERROR_STATUS: Record<SendError["code"], number> = {
   not_connected: 409,
   reconnect_required: 409,
   window_closed: 409,
+  message_limit: 409,
+  text_too_long: 422,
   meta_error: 422,
   meta_unavailable: 503,
   upload_failed: 502,

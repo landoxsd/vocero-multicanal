@@ -2,13 +2,50 @@ import { and, eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { graphRequest, MetaApiError, normalizeRecipient } from "@/lib/meta/client";
+import { destinatarioMeta, type Destinatario } from "@/lib/meta/destinatario";
 import { publish } from "@/server/events/bus";
 import {
   getCredentialsByOrg,
   markReconnectRequired,
   type Credentials,
 } from "@/server/whatsapp/credentials";
-import { isWindowOpen } from "@/server/inbox/window";
+import { isWindowOpen, replyWindow } from "@/server/inbox/window";
+import { plainSocialText } from "@/lib/social-text";
+import { IG_PREFIX } from "@/server/inbox/identity";
+import {
+  getInstagramCredentialsByOrg,
+  markInstagramReconnectRequired,
+  type InstagramCredentials,
+} from "@/server/instagram/credentials";
+import { sendInstagramText } from "@/server/instagram/send";
+import { FB_PREFIX } from "@/server/inbox/identity";
+import {
+  getMessengerCredentialsByOrg,
+  markMessengerReconnectRequired,
+  type MessengerCredentials,
+} from "@/server/messenger/credentials";
+import { sendMessengerText } from "@/server/messenger/send";
+import { TT_PREFIX } from "@/server/inbox/identity";
+import {
+  getTiktokCredentialsByOrg,
+  markTiktokReconnectRequired,
+  type TiktokCredentials,
+} from "@/server/tiktok/credentials";
+import { sendTiktokText } from "@/server/tiktok/send";
+import {
+  cabeOtroMensaje,
+  salientesDesdeElUltimoEntrante,
+} from "@/server/inbox/outbound-cap";
+import {
+  capabilitiesFor,
+  outboundLimitMessage,
+  textFits,
+  textLimitMessage,
+  windowClosedMessage,
+  windowMsFor,
+  aiWindowClosedMessage,
+} from "@/server/channels/capabilities";
+import { isChannelEnabled } from "@/server/channels/enabled";
 import { serializeMessage } from "@/server/inbox/ingest";
 import {
   saveMediaFile,
@@ -25,6 +62,10 @@ export class SendError extends Error {
     | "not_connected"
     | "reconnect_required"
     | "window_closed"
+    /** 022: el canal no admite más mensajes hasta que el cliente escriba. */
+    | "message_limit"
+    /** 022: el texto no cabe en el canal de esa conversación. */
+    | "text_too_long"
     | "meta_error"
     | "meta_unavailable"
     | "upload_failed";
@@ -43,9 +84,49 @@ type SendResult = { messageId: string };
 type SendTarget = {
   conversation: typeof schema.conversation.$inferSelect;
   channelAccount: ChannelAccountRecord | null;
+  /** null cuando el destino no es WhatsApp Cloud (014 o channelAccount). */
   credentials: Credentials | null;
+  /** El destinatario en la forma que Meta espera: `to` o `recipient`. */
+  destinatario: Destinatario;
+  /** El identificador a secas, para lo que no arma un payload de Graph. */
   recipient: string;
+  /** 014: presente solo en conversaciones de Instagram. */
+  instagram?: InstagramCredentials;
+  /** 017: presente solo en conversaciones de Messenger. */
+  messenger?: MessengerCredentials;
+  /** 022: presente solo en conversaciones de TikTok. */
+  tiktok?: TiktokCredentials;
+  /**
+   * 024: el envío sale con la etiqueta de agente humano. Lo decide el
+   * pre-vuelo (`assertReplyWindow`), no cada canal por su cuenta.
+   */
+  humanAgentTag?: boolean;
 };
+
+/**
+ * 024 — La puerta de la ventana para los canales con extensión humana
+ * (Instagram y Messenger). Devuelve si el envío lleva la etiqueta.
+ *
+ * - Dentro de la ventana normal escribe cualquiera.
+ * - Después, y hasta el tope de la extensión, solo una persona, con la
+ *   etiqueta. La IA no: Meta reserva esa etiqueta a agentes humanos.
+ * - Pasado el tope (o sin ningún mensaje del cliente) no escribe nadie, y se
+ *   dice aquí en vez de dejar que la plataforma rechace el envío con un error
+ *   que el operador no entiende.
+ */
+function assertReplyWindow(
+  conversation: SendTarget["conversation"],
+  aiGenerated: boolean
+): boolean {
+  const w = replyWindow(conversation.channel, conversation.lastInboundAt);
+  if (!w.operatorOpen) {
+    throw new SendError("window_closed", windowClosedMessage(conversation.channel));
+  }
+  if (aiGenerated && !w.standardOpen) {
+    throw new SendError("window_closed", aiWindowClosedMessage(conversation.channel));
+  }
+  return w.humanAgentTag;
+}
 
 /**
  * Pre-flight común de todo envío por la conversación (008): existencia +
@@ -54,7 +135,9 @@ type SendTarget = {
  */
 async function prepareSend(
   conversationId: string,
-  organizationId: string
+  organizationId: string,
+  /** 024: quién escribe decide si puede usar la extensión humana. */
+  aiGenerated: boolean = false
 ): Promise<SendTarget> {
   const db = getDb();
   const rows = await db
@@ -81,7 +164,7 @@ async function prepareSend(
     );
   }
 
-  // 1. Buscar canal omnicanal asignado a la conversación o primer canal activo
+  // 0. Si la conversación tiene un channelAccount asignado (ej. WhatsApp Web QR, MercadoLibre, etc.), enrutar por ahí
   let channelAccount: ChannelAccountRecord | null = null;
   if (row.conversation.channelAccountId) {
     const [ca] = await db
@@ -91,6 +174,127 @@ async function prepareSend(
       .limit(1);
     channelAccount = ca ?? null;
   }
+
+  // 014: Instagram oficial (Meta/Zernio) si no es una cuenta omnicanal explícita
+  if (!channelAccount && row.conversation.channel === "instagram") {
+    if (!isChannelEnabled("instagram")) {
+      throw new SendError(
+        "not_connected",
+        "El canal de Instagram está desactivado en esta instancia"
+      );
+    }
+    const igCreds = await getInstagramCredentialsByOrg(organizationId);
+    if (!igCreds) {
+      throw new SendError(
+        "not_connected",
+        "No hay cuenta de Instagram conectada"
+      );
+    }
+    if (igCreds.status === "reconnect_required") {
+      throw new SendError(
+        "reconnect_required",
+        "El token de Instagram expiró: reconecta la cuenta en Configuración"
+      );
+    }
+    const igRecipient = row.contact.waIdentity.startsWith(IG_PREFIX)
+      ? row.contact.waIdentity.slice(IG_PREFIX.length)
+      : row.contact.waIdentity;
+    const humanAgentTag = assertReplyWindow(row.conversation, aiGenerated);
+    return {
+      humanAgentTag,
+      conversation: row.conversation,
+      channelAccount: null,
+      credentials: null,
+      destinatario: { to: igRecipient },
+      recipient: igRecipient,
+      instagram: igCreds,
+    };
+  }
+
+  // 017: Messenger oficial (Meta/Zernio)
+  if (!channelAccount && row.conversation.channel === "messenger") {
+    if (!isChannelEnabled("messenger")) {
+      throw new SendError(
+        "not_connected",
+        "El canal de Messenger está desactivado en esta instancia"
+      );
+    }
+    const fbCreds = await getMessengerCredentialsByOrg(organizationId);
+    if (!fbCreds) {
+      throw new SendError(
+        "not_connected",
+        "No hay página de Facebook conectada"
+      );
+    }
+    if (fbCreds.status === "reconnect_required") {
+      throw new SendError(
+        "reconnect_required",
+        "El token de la página expiró: reconecta Messenger en Configuración"
+      );
+    }
+    const fbRecipient = row.contact.waIdentity.startsWith(FB_PREFIX)
+      ? row.contact.waIdentity.slice(FB_PREFIX.length)
+      : row.contact.waIdentity;
+    const humanAgentTag = assertReplyWindow(row.conversation, aiGenerated);
+    return {
+      humanAgentTag,
+      conversation: row.conversation,
+      channelAccount: null,
+      credentials: null,
+      destinatario: { to: fbRecipient },
+      recipient: fbRecipient,
+      messenger: fbCreds,
+    };
+  }
+
+  // 022: TikTok oficial (Zernio)
+  if (!channelAccount && row.conversation.channel === "tiktok") {
+    if (!isChannelEnabled("tiktok")) {
+      throw new SendError(
+        "not_connected",
+        "El canal de TikTok está desactivado en esta instancia"
+      );
+    }
+    const ttCreds = await getTiktokCredentialsByOrg(organizationId);
+    if (!ttCreds) {
+      throw new SendError("not_connected", "No hay cuenta de TikTok conectada");
+    }
+    if (ttCreds.status === "reconnect_required") {
+      throw new SendError(
+        "reconnect_required",
+        "La llave de Zernio dejó de servir: reconecta TikTok en Configuración"
+      );
+    }
+    if (
+      !isWindowOpen(
+        row.conversation.lastInboundAt,
+        new Date(),
+        windowMsFor("tiktok")
+      )
+    ) {
+      throw new SendError("window_closed", windowClosedMessage("tiktok"));
+    }
+    const enviados = await salientesDesdeElUltimoEntrante(
+      organizationId,
+      conversationId
+    );
+    if (!cabeOtroMensaje("tiktok", enviados)) {
+      throw new SendError("message_limit", outboundLimitMessage("tiktok"));
+    }
+    const ttRecipient = row.contact.waIdentity.startsWith(TT_PREFIX)
+      ? row.contact.waIdentity.slice(TT_PREFIX.length)
+      : row.contact.waIdentity;
+    return {
+      conversation: row.conversation,
+      channelAccount: null,
+      credentials: null,
+      destinatario: { to: ttRecipient },
+      recipient: ttRecipient,
+      tiktok: ttCreds,
+    };
+  }
+
+  // Fallback a primer canal omnicanal conectado (ej. WhatsApp Web QR) si no hay credenciales Meta Cloud o es conversación de WhatsApp/MeLi
   if (!channelAccount) {
     const [ca] = await db
       .select()
@@ -105,41 +309,73 @@ async function prepareSend(
     channelAccount = ca ?? null;
   }
 
-  let credentials: Credentials | null = null;
-  if (!channelAccount) {
-    credentials = await getCredentialsByOrg(organizationId);
-    if (credentials && credentials.status === "reconnect_required") {
+  if (channelAccount) {
+    const recipient = row.contact.phone
+      ? normalizeRecipient(row.contact.phone)
+      : row.contact.externalId || row.contact.waUserId || row.contact.waIdentity;
+    if (!recipient) {
       throw new SendError(
-        "reconnect_required",
-        "El token de WhatsApp expiró: reconecta el número en Configuración"
+        "meta_error",
+        "El contacto no tiene teléfono ni identificador utilizable"
       );
     }
+    return {
+      conversation: row.conversation,
+      channelAccount,
+      credentials: null,
+      destinatario: { to: recipient },
+      recipient,
+    };
   }
 
-  if (!channelAccount && !credentials) {
-    throw new SendError("not_connected", "No hay número de WhatsApp conectado");
-  }
-
-  // Para canales Cloud API, validar ventana de 24h
-  if (!channelAccount && !isWindowOpen(row.conversation.lastInboundAt)) {
+  // El nucleo no decide la politica: la consulta. WhatsApp Cloud exige plantilla
+  // fuera de ventana.
+  const caps = capabilitiesFor(row.conversation.channel);
+  if (
+    caps.windowMs !== null &&
+    caps.outsideWindow === "template" &&
+    !isWindowOpen(row.conversation.lastInboundAt)
+  ) {
     throw new SendError(
       "window_closed",
-      "La ventana de 24 horas está cerrada; usa una plantilla aprobada"
+      windowClosedMessage(row.conversation.channel)
     );
   }
 
-  // Destinatario: teléfono o identificador externo
-  const recipient = row.contact.phone
-    ? normalizeRecipient(row.contact.phone)
-    : row.contact.externalId || row.contact.waUserId;
-  if (!recipient) {
+  const credentials = await getCredentialsByOrg(organizationId);
+  if (!credentials) {
+    throw new SendError("not_connected", "No hay número de WhatsApp conectado");
+  }
+  if (credentials.status === "reconnect_required") {
+    throw new SendError(
+      "reconnect_required",
+      "El token de WhatsApp expiró: reconecta el número en Configuración"
+    );
+  }
+
+  const destinatario = destinatarioMeta(
+    row.contact.phone ? normalizeRecipient(row.contact.phone) : null,
+    row.contact.waUserId
+  );
+  const recipient = destinatario
+    ? "to" in destinatario
+      ? destinatario.to
+      : destinatario.recipient
+    : null;
+  if (!destinatario || !recipient) {
     throw new SendError(
       "meta_error",
       "El contacto no tiene teléfono ni identificador utilizable"
     );
   }
 
-  return { conversation: row.conversation, channelAccount, credentials, recipient };
+  return {
+    conversation: row.conversation,
+    channelAccount: null,
+    credentials,
+    destinatario,
+    recipient,
+  };
 }
 
 async function persistOutbound(input: {
@@ -148,6 +384,13 @@ async function persistOutbound(input: {
   waMessageId: string | null;
   type: string;
   text: string | null;
+  /**
+   * 014: 'sent' existe porque no todos los canales confirman por webhook.
+   * WhatsApp entra como 'pending' y avanza con los `statuses` de Meta;
+   * Instagram no manda ese evento salvo que se suscriba aparte, asi que la
+   * aceptacion de la plataforma ES la confirmacion. Sin esto el mensaje se
+   * queda con el reloj puesto para siempre aunque ya se haya entregado.
+   */
   status: "pending" | "sent" | "failed";
   error?: string | null;
   aiGenerated?: boolean;
@@ -198,43 +441,69 @@ export async function sendText(input: {
   text: string;
   aiGenerated?: boolean;
 }): Promise<SendResult> {
-  const { channelAccount, credentials, recipient } = await prepareSend(
+  const target = await prepareSend(
     input.conversationId,
-    input.organizationId
+    input.organizationId,
+    input.aiGenerated ?? false
   );
+  const { channelAccount, credentials, recipient } = target;
+  const canal = target.conversation.channel;
+
+  // 024: la IA escribe con formato de WhatsApp (y a veces Markdown). En un
+  // canal que no lo dibuja se le quitan las marcas ANTES de medir, enviar y
+  // guardar: lo que queda en el hilo es lo que el cliente leyó. Lo que escribe
+  // una persona no se toca.
+  const text =
+    input.aiGenerated && capabilitiesFor(canal).textFormat === "plain"
+      ? plainSocialText(input.text)
+      : input.text;
+
+  // 022: el límite de longitud es del canal. WhatsApp y TikTok lo declaran en
+  // caracteres y se comprueba aquí, antes de llamar a nadie; Instagram y
+  // Messenger (en bytes) lo siguen comprobando en su propio camino.
+  if (capabilitiesFor(canal).maxTextChars !== null && !textFits(canal, text)) {
+    throw new SendError("text_too_long", textLimitMessage(canal));
+  }
 
   let waMessageId: string | null = null;
-
   if (channelAccount) {
     const res = await omniChannelManager.sendOutboundMessage(channelAccount, {
       channelAccountId: channelAccount.id,
       recipientId: recipient,
-      text: input.text,
+      text,
     });
     if (!res.success) {
       throw new SendError("meta_error", res.error || "Fallo enviando mensaje por canal omnicanal");
     }
     waMessageId = res.externalMessageId || `chn_${Date.now()}`;
-  } else if (credentials) {
-    waMessageId = await callGraphSend(credentials, {
+  } else if (target.instagram) {
+    waMessageId = await callInstagramSend(target, text);
+  } else if (target.messenger) {
+    waMessageId = await callMessengerSend(target, text);
+  } else if (target.tiktok) {
+    waMessageId = await callTiktokSend(target, text);
+  } else {
+    waMessageId = await callGraphSend(credentials!, {
       messaging_product: "whatsapp",
-      to: recipient,
+      ...target.destinatario,
       type: "text",
-      text: { body: input.text },
+      text: { body: text },
     });
   }
-
-  // Para WhatsApp Web (WPPConnect) el envío ya confirmó entrega de forma síncrona.
-  // Para Cloud API de Meta, el estado real llega por webhook de status después.
-  const initialStatus = channelAccount ? "sent" : "pending";
 
   const messageId = await persistOutbound({
     organizationId: input.organizationId,
     conversationId: input.conversationId,
     waMessageId,
     type: "text",
-    text: input.text,
-    status: initialStatus,
+    text,
+    // Un canal sin acuses de entrega (o WA Web directo) confirma al aceptar;
+    // uno con acuses avanza despues por webhook.
+    status: channelAccount
+      ? "sent"
+      : capabilitiesFor(target.conversation.channel).deliveryReceipts
+        ? "pending"
+        : "sent",
     aiGenerated: input.aiGenerated,
     origin: input.aiGenerated ? "ai" : "operator",
   });
@@ -257,10 +526,15 @@ export async function sendMediaMessage(input: {
   // Validación previa (FR-007): tipo y tamaño antes de tocar disco o red.
   const kind = validateOutgoing(input.file.mimeType, input.file.data.byteLength);
 
-  const { channelAccount, credentials, recipient } = await prepareSend(
-    input.conversationId,
-    input.organizationId
-  );
+  const target = await prepareSend(input.conversationId, input.organizationId);
+  const { channelAccount, credentials, recipient } = target;
+  const sendCaps = capabilitiesFor(target.conversation.channel);
+  if (!channelAccount && !sendCaps.outboundMedia) {
+    throw new SendError(
+      "meta_error",
+      `Todavía no se pueden enviar adjuntos por ${sendCaps.label}; manda el texto`
+    );
+  }
 
   const db = getDb();
   const assetId = newId("mediaAsset");
@@ -316,7 +590,7 @@ export async function sendMediaMessage(input: {
       }
       waMessageId = await callGraphSend(credentials, {
         messaging_product: "whatsapp",
-        to: recipient,
+        ...target.destinatario,
         type: kind,
         [kind]: mediaPayload,
       });
@@ -387,10 +661,17 @@ export async function sendStructured(
     | { kind: "contacts"; contacts: ContactInput[] }
   )
 ): Promise<SendResult> {
-  const { channelAccount, credentials, recipient } = await prepareSend(
+  const target = await prepareSend(
     input.conversationId,
     input.organizationId
   );
+  const { channelAccount, credentials, recipient } = target;
+  if (!channelAccount && !credentials) {
+    throw new SendError(
+      "meta_error",
+      "Este canal no admite ubicaciones ni contactos; manda el texto"
+    );
+  }
 
   const payload =
     input.kind === "location"
@@ -418,7 +699,7 @@ export async function sendStructured(
   } else if (credentials) {
     waMessageId = await callGraphSend(credentials, {
       messaging_product: "whatsapp",
-      to: recipient,
+      ...target.destinatario,
       ...payload,
     });
   }
@@ -474,6 +755,153 @@ export async function callGraphSend(
       }
       if (err.status === 0 || err.status >= 500) {
         throw new SendError("meta_unavailable", "Meta no está disponible ahora");
+      }
+      throw new SendError("meta_error", err.message);
+    }
+    throw err;
+  }
+}
+
+
+/**
+ * 014 — Envío por el canal de Instagram. Traduce los fallos al mismo
+ * vocabulario de SendError que ya usa WhatsApp, para que la bandeja no tenga
+ * que aprender un idioma por plataforma.
+ */
+async function callInstagramSend(
+  target: SendTarget,
+  text: string
+): Promise<string> {
+  const creds = target.instagram!;
+
+  const caps = capabilitiesFor("instagram");
+  if (!textFits("instagram", text)) {
+    throw new SendError(
+      "meta_error",
+      `${caps.label} no acepta mensajes de más de ${caps.maxTextBytes} bytes: acorta el texto`
+    );
+  }
+
+  // Instagram no tiene plantillas: fuera de la ventana de 24 h la única vía
+  // es la etiqueta de agente humano (hasta 7 días). 024: quién puede usarla
+  // lo decidió ya el pre-vuelo.
+  const humanAgentTag = target.humanAgentTag ?? false;
+
+  try {
+    const res = await sendInstagramText({
+      credentials: creds,
+      recipient: target.recipient,
+      threadRef: target.conversation.channelThreadRef,
+      text,
+      humanAgentTag,
+    });
+    return res.platformMessageId;
+  } catch (err) {
+    if (err instanceof MetaApiError) {
+      if (err.isAuthError) {
+        await markInstagramReconnectRequired(creds.organizationId);
+        throw new SendError(
+          "reconnect_required",
+          "El token de Instagram expiró o fue revocado: reconecta la cuenta"
+        );
+      }
+      if (err.status === 0 || err.status >= 500) {
+        throw new SendError(
+          "meta_unavailable",
+          "Instagram no está disponible en este momento; intenta de nuevo"
+        );
+      }
+      throw new SendError("meta_error", err.message);
+    }
+    throw err;
+  }
+}
+
+/**
+ * 017 — Envío por el canal de Messenger. Mismo vocabulario de SendError que
+ * WhatsApp e Instagram: la bandeja no aprende un idioma por plataforma.
+ */
+async function callMessengerSend(
+  target: SendTarget,
+  text: string
+): Promise<string> {
+  const creds = target.messenger!;
+
+  const caps = capabilitiesFor("messenger");
+  if (!textFits("messenger", text)) {
+    throw new SendError(
+      "meta_error",
+      `${caps.label} no acepta mensajes de más de ${caps.maxTextBytes} bytes: acorta el texto`
+    );
+  }
+
+  // Messenger no tiene plantillas: fuera de la ventana de 24 h la única vía
+  // es la etiqueta de agente humano (hasta 7 días). 024: quién puede usarla
+  // lo decidió ya el pre-vuelo.
+  const humanAgentTag = target.humanAgentTag ?? false;
+
+  try {
+    const res = await sendMessengerText({
+      credentials: creds,
+      recipient: target.recipient,
+      // Zernio responde dentro de SU conversación, no al PSID: sin esta
+      // referencia el envío no tiene a dónde ir.
+      threadRef: target.conversation.channelThreadRef,
+      text,
+      humanAgentTag,
+    });
+    return res.platformMessageId;
+  } catch (err) {
+    if (err instanceof MetaApiError) {
+      if (err.isAuthError) {
+        await markMessengerReconnectRequired(creds.organizationId);
+        throw new SendError(
+          "reconnect_required",
+          "El token de la página expiró o fue revocado: reconecta Messenger"
+        );
+      }
+      if (err.status === 0 || err.status >= 500) {
+        throw new SendError(
+          "meta_unavailable",
+          "Messenger no está disponible en este momento; intenta de nuevo"
+        );
+      }
+      throw new SendError("meta_error", err.message);
+    }
+    throw err;
+  }
+}
+
+/**
+ * 022 — Envío por el canal de TikTok. Mismo vocabulario de SendError que los
+ * demás canales. La ventana y el tope ya se comprobaron en `prepareSend`.
+ */
+async function callTiktokSend(target: SendTarget, text: string): Promise<string> {
+  const creds = target.tiktok!;
+
+  try {
+    const res = await sendTiktokText({
+      credentials: creds,
+      // Zernio responde dentro de SU conversación: sin esta referencia el
+      // envío no tiene a dónde ir.
+      threadRef: target.conversation.channelThreadRef,
+      text,
+    });
+    return res.platformMessageId;
+  } catch (err) {
+    if (err instanceof MetaApiError) {
+      if (err.isAuthError) {
+        await markTiktokReconnectRequired(creds.organizationId);
+        throw new SendError(
+          "reconnect_required",
+          "La llave de Zernio expiró o fue revocada: reconecta TikTok"
+        );
+      }
+      if (err.status === 0 || err.status >= 500) {
+        throw new SendError(
+          "meta_unavailable",
+          "TikTok no está disponible en este momento; intenta de nuevo"
+        );
       }
       throw new SendError("meta_error", err.message);
     }

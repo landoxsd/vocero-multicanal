@@ -1,3 +1,7 @@
+import {
+  MAX_TEXT_CHARS_ANY_CHANNEL,
+  TEXT_TOO_LONG_ANY_CHANNEL,
+} from "@/server/channels/capabilities";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, schema } from "@/lib/db";
@@ -9,7 +13,9 @@ export const dynamic = "force-dynamic";
 
 const bodySchema = z.object({
   conversationId: z.string().min(1),
-  text: z.string().min(1).max(4096),
+  // 022: el tope de aquí es el del canal que más admite; el de cada canal
+  // lo comprueba el envío y sale como el mismo 422 `invalid_body` de siempre.
+  text: z.string().min(1).max(MAX_TEXT_CHARS_ANY_CHANNEL, TEXT_TOO_LONG_ANY_CHANNEL),
 });
 
 /**
@@ -19,7 +25,8 @@ const bodySchema = z.object({
  * y hereda el guard de sandbox del Laboratorio.
  *
  * 409 tipados: ai_paused (un humano tomó la conversación) · window_closed ·
- * sandbox_violation.
+ * sandbox_violation · message_limit (022: el canal no admite más mensajes
+ * hasta que el cliente escriba; hoy, el tope de TikTok).
  */
 export async function POST(req: Request) {
   const denied = requireBotKey(req);
@@ -71,6 +78,14 @@ export async function POST(req: Request) {
       }
       if (err.code === "sandbox_violation") {
         return apiError(409, "sandbox_violation", err.message);
+      }
+      if (err.code === "message_limit") {
+        return apiError(409, "message_limit", err.message);
+      }
+      // Un texto de más de 4,096 caracteres por WhatsApp ya daba 422
+      // `invalid_body` (lo cortaba el esquema): se conserva el código.
+      if (err.code === "text_too_long") {
+        return apiError(422, "invalid_body", err.message);
       }
       return apiError(502, err.code, err.message);
     }

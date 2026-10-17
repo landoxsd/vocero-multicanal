@@ -39,7 +39,8 @@ Objetivo / Loop SDD) — son el núcleo evergreen.
 ## 4. MCP + credenciales
 
 - Configura los servidores MCP que uses: ver [mcp-setup.md](mcp-setup.md).
-- `cp .env.example .env` y rellena los `REEMPLAZA_...`. `.env` está gitignored.
+- `pnpm init-env` crea `.env` con los secretos ya generados (o `cp .env.example .env`
+  y rellena los `REEMPLAZA_...`); `pnpm doctor` lo revisa. `.env` está gitignored.
 
 ## 5. Tu primera feature
 

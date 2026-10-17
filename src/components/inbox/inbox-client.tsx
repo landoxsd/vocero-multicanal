@@ -6,6 +6,8 @@ import { ChevronLeft, PanelRight, BookMarked } from "lucide-react";
 import { cn, formatPhone } from "@/lib/utils";
 import { ContactAvatar } from "@/components/avatar";
 import type { ConversationDto, MessageDto } from "@/lib/types";
+import { CHANNEL_LABEL, type Channel } from "@/lib/channels";
+import { ChannelBadge } from "@/components/channel-badge";
 import { useEvents } from "@/components/use-events";
 import { ConversationList } from "./conversation-list";
 import { MessageThread } from "./message-thread";
@@ -36,7 +38,15 @@ const PANEL_MEDIA_QUERY = "(min-width: 1280px)";
 const isWideEnoughForPanel = () =>
   typeof window !== "undefined" && window.matchMedia(PANEL_MEDIA_QUERY).matches;
 
-export function InboxClient() {
+export function InboxClient({
+  channels,
+  canDelete = false,
+}: {
+  channels: readonly Channel[];
+  /** 026 — Eliminar es irreversible: solo quien administra ve la opción. */
+  canDelete?: boolean;
+}) {
+  const multiChannel = channels.length > 1;
   const [conversations, setConversations] = useState<ConversationDto[] | null>(
     null
   );
@@ -145,6 +155,16 @@ export function InboxClient() {
     [refetchMessages, markRead]
   );
 
+  /** 026 — Saca una conversación eliminada de todo lo que esta pestaña recuerda. */
+  const quitarConversacion = useCallback((id: string) => {
+    setConversations((prev) => prev?.filter((c) => c.id !== id) ?? prev);
+    setPending((prev) => prev.filter((p) => p.conversationId !== id));
+    if (selectedIdRef.current === id) {
+      setSelectedId(null);
+      setMessages([]);
+    }
+  }, []);
+
   // Enlace directo desde Contactos/Pipeline: /inbox?contact=<id>
   const searchParams = useSearchParams();
   const contactParam = searchParams.get("contact");
@@ -185,6 +205,13 @@ export function InboxClient() {
       void refetchConversations();
       // El agente movió de etapa o cambió el handoff: refresca el panel en vivo.
       setDetailRev((v) => v + 1);
+    },
+    onConversationDeleted: ({ conversationId }) => {
+      // 026: la eliminó alguien del equipo (o esta misma pestaña). Se quita
+      // ya, sin esperar al refetch, para que nadie le escriba a un hilo que
+      // no existe.
+      quitarConversacion(conversationId);
+      void refetchConversations();
     },
     onReconnect: () => {
       // Catch-up tras reconexión (contrato sse.md): refetch completo.
@@ -304,6 +331,30 @@ export function InboxClient() {
     [refetchConversations]
   );
 
+  /** 026 — Devuelve el mensaje de error, o null si la conversación ya no existe. */
+  const deleteConversation = useCallback(
+    async (alsoContact: boolean): Promise<string | null> => {
+      const id = selectedIdRef.current;
+      if (!id) return "Sin conversación seleccionada";
+      const res = await fetch(
+        `/api/conversations/${id}${alsoContact ? "?contacto=1" : ""}`,
+        { method: "DELETE" }
+      ).catch(() => null);
+      if (!res) return "Sin conexión con el servidor";
+      // 404 = otra persona la eliminó primero: para quien lo pidió, ya está.
+      if (!res.ok && res.status !== 404) {
+        const data = (await res.json().catch(() => null)) as {
+          error?: { message?: string };
+        } | null;
+        return data?.error?.message ?? "No se pudo eliminar la conversación";
+      }
+      quitarConversacion(id);
+      void refetchConversations();
+      return null;
+    },
+    [quitarConversacion, refetchConversations]
+  );
+
   return (
     <div className="flex h-full">
       {/* Móvil: una columna a la vez. La lista cede la pantalla completa al
@@ -316,6 +367,7 @@ export function InboxClient() {
       >
         <ConversationList
           conversations={conversations}
+          channels={channels}
           selectedId={selectedId}
           onSelect={select}
           onSeeded={() => void refetchConversations()}
@@ -339,7 +391,7 @@ export function InboxClient() {
               <button
                 onClick={() => setSelectedId(null)}
                 aria-label="Volver a las conversaciones"
-                className="shrink-0 rounded-md p-1.5 text-text-2 hover:bg-accent hover:text-foreground md:hidden"
+                className="shrink-0 rounded-md p-1.5 text-text-2 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:hidden"
               >
                 <ChevronLeft className="h-5 w-5" strokeWidth={1.8} />
               </button>
@@ -350,19 +402,32 @@ export function InboxClient() {
                   size="md"
                 />
                 <div className="min-w-0">
-                  <p className="truncate text-[15px] font-[650] leading-tight">
-                    {selected.contact.name}
+                  <p className="flex min-w-0 items-center gap-1.5 text-[15px] font-bold leading-tight tracking-tight">
+                    {multiChannel && <ChannelBadge channel={selected.channel} />}
+                    <span className="truncate">{selected.contact.name}</span>
                   </p>
                   <p
-                    className={
+                    className={cn(
+                      "mt-0.5 font-mono text-[10.5px] tracking-[0.04em]",
                       selected.windowOpen
-                        ? "text-xs font-medium text-success"
-                        : "text-xs text-text-3"
-                    }
+                        ? "font-medium text-success-text"
+                        : selected.humanWindow?.open
+                          ? "font-medium text-info-text"
+                          : "text-text-3"
+                    )}
                   >
                     {selected.windowOpen
                       ? "ventana abierta"
-                      : formatPhone(selected.contact.phone)}
+                      : selected.humanWindow?.open
+                        ? // 024: pasadas 24 h en Instagram o Messenger solo
+                          // contesta una persona. No se llama «atención
+                          // humana»: eso ya es el traspaso, con la IA en pausa.
+                          "ventana humana"
+                        : selected.contact.phone
+                        ? formatPhone(selected.contact.phone)
+                        : // Instagram no tiene teléfono: decir "Sin teléfono"
+                          // sería contestar una pregunta que nadie hizo.
+                          CHANNEL_LABEL[selected.channel]}
                   </p>
                 </div>
               </div>
@@ -370,7 +435,7 @@ export function InboxClient() {
                 <button
                   onClick={() => togglePanel(true)}
                   aria-label="Mostrar detalles"
-                  className="shrink-0 rounded-sm border p-1.5 text-text-3 hover:bg-accent hover:text-foreground"
+                  className="shrink-0 rounded-full border border-border-strong p-1.5 text-text-3 transition-colors hover:border-text-3 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <PanelRight className="h-4 w-4" strokeWidth={1.7} />
                 </button>
@@ -389,6 +454,9 @@ export function InboxClient() {
               onSaveToKb={(messageId) => setKbDialog({ messageId })}
             />
             <Composer
+              // 028: uno por conversación. Sin la llave, el borrador, el adjunto
+              // elegido y el panel abierto pasaban a la siguiente conversación.
+              key={selected.id}
               conversation={selected}
               onSend={sendText}
               onSent={() => {
@@ -399,8 +467,11 @@ export function InboxClient() {
             />
           </>
         ) : (
-          <div className="flex flex-1 items-center justify-center bg-chat text-sm text-text-3">
-            Elige una conversación para ver el hilo
+          <div className="thread-bg flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
+            <p className="font-serif text-[24px] italic leading-tight text-text-2">
+              Elige una conversación para ver el hilo
+            </p>
+            <p className="kicker">Bandeja · tiempo real</p>
           </div>
         )}
       </section>
@@ -417,10 +488,10 @@ export function InboxClient() {
 
       <section
         className={cn(
-          "shrink-0 overflow-hidden border-l transition-[width] duration-[220ms]",
+          "shrink-0 overflow-hidden border-l transition-[width] duration-200",
           // Debajo de xl no hay ancho para una tercera columna: el panel se
           // vuelve un cajón que entra desde la derecha, encima del hilo.
-          "max-xl:fixed max-xl:inset-y-0 max-xl:right-0 max-xl:z-40 max-xl:w-auto max-xl:bg-background max-xl:transition-transform",
+          "max-xl:fixed max-xl:inset-y-0 max-xl:right-0 max-xl:z-40 max-xl:w-auto max-xl:bg-popover max-xl:transition-transform",
           panelOpen && selected
             ? "w-[320px] max-xl:translate-x-0 max-xl:shadow-pop"
             : "w-0 border-l-0 max-xl:translate-x-full"
@@ -432,6 +503,7 @@ export function InboxClient() {
               conversation={selected}
               refreshKey={detailRev}
               onPatchConversation={patchConversation}
+              onDeleteConversation={canDelete ? deleteConversation : undefined}
               onClose={() => togglePanel(false)}
             />
           </div>

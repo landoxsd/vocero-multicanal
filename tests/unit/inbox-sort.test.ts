@@ -9,6 +9,7 @@ function conv(
 ): ConversationDto {
   return {
     id,
+    channel: "whatsapp",
     contact: { id: `ct_${id}`, name: id, phone: null },
     stageName: null,
     aiEnabled: true,
@@ -21,7 +22,10 @@ function conv(
     unreadCount: 0,
     windowOpen: true,
     windowRemainingMs: 86_400_000,
+    humanWindow: null,
+    composer: { media: true, structured: true },
     preview: null,
+    anuncio: null,
     ...extra,
   };
 }

@@ -20,6 +20,22 @@ const prefixes = {
   testCase: "case",
   mediaAsset: "ma",
   channelAccount: "chn",
+  // 015 — motor de agenda
+  calendarSettings: "cal",
+  booking: "bk",
+  offeredSlot: "ofs",
+  zoomCredentials: "zcred",
+  googleCredentials: "gcred",
+  // 016 — atribución de anuncios
+  adAttribution: "att",
+  conversionEvent: "cve",
+  capiSettings: "capi",
+  // Ajustes → IA (issue #85)
+  aiCredentials: "aicred",
+  // 021 — despacho al cerebro
+  dispatch: "dsp",
+  // 026 — el aviso de que una conversación se eliminó
+  olvido: "olv",
 } as const;
 
 export type IdKind = keyof typeof prefixes;

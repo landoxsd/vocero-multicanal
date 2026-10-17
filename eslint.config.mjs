@@ -13,6 +13,7 @@ const config = [
       "services/whatsapp-web-manager/**",
       "next-env.d.ts",
       ".tmp-seed-demo.mjs",
+      ".tmp-*.mjs",
     ],
   },
   ...compat.extends("next/core-web-vitals", "next/typescript"),

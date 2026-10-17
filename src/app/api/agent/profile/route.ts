@@ -2,7 +2,7 @@ import { z } from "zod";
 import { apiError, parseBody, withAuth } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
-import { isAiConfigured } from "@/lib/env";
+import { estadoIaDe, mensajeDeEstado } from "@/lib/ai/provider";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +15,7 @@ export const GET = withAuth(async (session) => {
     .limit(1);
   const p = rows[0];
   if (!p) return apiError(404, "not_found", "Perfil del agente no encontrado");
+  const estado = await estadoIaDe(session.organizationId);
   return Response.json({
     profile: {
       enabled: p.enabled,
@@ -24,7 +25,10 @@ export const GET = withAuth(async (session) => {
       escalationRules: p.escalationRules,
       greeting: p.greeting,
     },
-    aiConfigured: isAiConfigured(),
+    aiConfigured: estado.activa,
+    // Por qué no (sin configurar, llave rechazada, sin saldo): la pantalla
+    // Agente lo dice con el enlace a Ajustes → IA.
+    aiMensaje: mensajeDeEstado(estado),
   });
 });
 

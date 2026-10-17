@@ -1,10 +1,44 @@
 import { and, desc, eq, gt, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
-import { isWindowOpen, windowRemainingMs } from "@/server/inbox/window";
+import { isWindowOpen, replyWindow, windowRemainingMs } from "@/server/inbox/window";
+import { capabilitiesFor, windowMsFor } from "@/server/channels/capabilities";
 import { computeWaitingState } from "@/server/inbox/waiting";
-
 import type { ConversationDto } from "@/lib/types";
+
+/**
+ * 018 — El anuncio de origen viaja con la conversación. La llave única
+ * (organización, conversación) garantiza a lo más una fila por renglón, así
+ * que el LEFT JOIN no multiplica la lista.
+ */
+const anuncioDeLaConversacion = and(
+  eq(schema.adAttribution.organizationId, schema.conversation.organizationId),
+  eq(schema.adAttribution.conversationId, schema.conversation.id)
+);
+
+const anuncioDeLista = {
+  id: schema.adAttribution.id,
+  headline: schema.adAttribution.headline,
+  sourceId: schema.adAttribution.sourceId,
+  sourceType: schema.adAttribution.sourceType,
+};
+
+function aAnuncioDeLista(
+  fila: {
+    id: string | null;
+    headline: string | null;
+    sourceId: string | null;
+    sourceType: string | null;
+  } | null
+): ConversationDto["anuncio"] {
+  // Sin fila, drizzle devuelve el objeto con todo en null (o null a secas).
+  if (!fila?.id) return null;
+  return {
+    headline: fila.headline,
+    sourceId: fila.sourceId,
+    sourceType: fila.sourceType,
+  };
+}
 
 export async function listConversations(
   organizationId: string,
@@ -61,6 +95,7 @@ export async function listConversations(
       stageName: stageSql,
       lastMessageDirection: lastDirSql,
       channelAccount: schema.channelAccount,
+      anuncio: anuncioDeLista,
     })
     .from(schema.conversation)
     .innerJoin(
@@ -71,6 +106,7 @@ export async function listConversations(
       schema.channelAccount,
       eq(schema.conversation.channelAccountId, schema.channelAccount.id)
     )
+    .leftJoin(schema.adAttribution, anuncioDeLaConversacion)
     .where(
       scoped(
         schema.conversation.organizationId,
@@ -85,17 +121,17 @@ export async function listConversations(
     const isUnrestricted =
       hasConnectedWeb ||
       (r.channelAccount && r.channelAccount.provider !== "whatsapp_cloud") ||
-      r.conversation.platform === "instagram" ||
-      r.conversation.platform === "mercadolibre" ||
-      r.conversation.platform === "facebook";
+      r.conversation.platform === "mercadolibre";
 
     return serializeConversation(
       r.conversation,
       r.contact,
       r.preview,
       r.stageName,
+      aAnuncioDeLista(r.anuncio),
       Boolean(isUnrestricted),
-      r.lastMessageDirection
+      r.lastMessageDirection,
+      r.channelAccount?.name ?? null
     );
   });
 }
@@ -110,6 +146,7 @@ export async function getConversation(
       conversation: schema.conversation,
       contact: schema.contact,
       channelAccount: schema.channelAccount,
+      anuncio: anuncioDeLista,
     })
     .from(schema.conversation)
     .innerJoin(
@@ -120,6 +157,7 @@ export async function getConversation(
       schema.channelAccount,
       eq(schema.conversation.channelAccountId, schema.channelAccount.id)
     )
+    .leftJoin(schema.adAttribution, anuncioDeLaConversacion)
     .where(
       scoped(
         schema.conversation.organizationId,
@@ -128,7 +166,8 @@ export async function getConversation(
       )
     )
     .limit(1);
-  return rows[0] ?? null;
+  const row = rows[0];
+  return row ? { ...row, anuncio: aAnuncioDeLista(row.anuncio) } : null;
 }
 
 export async function listMessages(
@@ -160,17 +199,23 @@ export function serializeConversation(
   contact: typeof schema.contact.$inferSelect,
   preview: string | null = null,
   stageName: string | null = null,
+  anuncio: ConversationDto["anuncio"] = null,
   isUnrestricted: boolean = false,
-  lastMessageDirection: "in" | "out" | null = null
+  lastMessageDirection: "in" | "out" | null = null,
+  channelName: string | null = null
 ): ConversationDto {
+  const caps = capabilitiesFor(c.channel);
+  // 024: la extensión humana solo existe en los canales que la declaran.
+  const reply =
+    caps.humanAgentWindowMs !== null
+      ? replyWindow(c.channel, c.lastInboundAt)
+      : null;
+
   const isWebOrOmni =
     isUnrestricted ||
-    c.platform === "instagram" ||
-    c.platform === "mercadolibre" ||
-    c.platform === "facebook";
+    Boolean(c.channelAccountId) ||
+    c.platform === "mercadolibre";
 
-  const windowOpen = isWebOrOmni ? true : isWindowOpen(c.lastInboundAt);
-  const windowRemaining = isWebOrOmni ? 24 * 60 * 60 * 1000 : windowRemainingMs(c.lastInboundAt);
   const { needsReply, waitingMs } = computeWaitingState({
     lastMessageDirection,
     lastInboundAt: c.lastInboundAt,
@@ -178,8 +223,10 @@ export function serializeConversation(
 
   return {
     id: c.id,
+    channel: c.channel,
     contact: { id: contact.id, name: contact.name, phone: contact.phone },
-    platform: c.platform || contact.platform || "whatsapp",
+    platform: c.platform || contact.platform || c.channel || "whatsapp",
+    channelName,
     stageName,
     aiEnabled: c.aiEnabled,
     handoffAt: c.handoffAt?.toISOString() ?? null,
@@ -189,9 +236,25 @@ export function serializeConversation(
     needsReply,
     waitingMs,
     unreadCount: c.unreadCount,
-    windowOpen,
-    windowRemainingMs: windowRemaining,
+    // 022: la ventana es la del canal (48 h en TikTok, 24 en los demás), o siempre abierta en WA Web.
+    windowOpen: isWebOrOmni
+      ? true
+      : isWindowOpen(c.lastInboundAt, new Date(), windowMsFor(c.channel)),
+    windowRemainingMs: isWebOrOmni
+      ? 24 * 60 * 60 * 1000
+      : windowRemainingMs(
+          c.lastInboundAt,
+          new Date(),
+          windowMsFor(c.channel)
+        ),
+    humanWindow: reply
+      ? { open: reply.humanAgentTag, remainingMs: reply.humanAgentTag ? reply.operatorRemainingMs : 0 }
+      : null,
+    composer: isWebOrOmni
+      ? { media: true, structured: true }
+      : { media: caps.outboundMedia, structured: caps.structuredMessages },
     preview,
+    anuncio,
   };
 }
 

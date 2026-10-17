@@ -1,34 +1,117 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import Link from "next/link";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
+  Clock3,
+  FileText,
+  Inbox,
+  Plus,
+  RefreshCw,
+  Send,
+  Sparkles,
+} from "lucide-react";
 import type { TemplateDto } from "@/lib/types";
-import { countVariables, validateBodyVariables } from "@/lib/templates";
+import {
+  countVariables,
+  renderBody,
+  templateWarnings,
+  validateBodyVariables,
+} from "@/lib/templates";
+import {
+  DEFAULT_TEMPLATE_LANGUAGE,
+  TEMPLATE_LANGUAGE_GROUPS,
+  TEMPLATE_LANGUAGES,
+  templateLanguageName,
+} from "@/lib/template-languages";
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
+type Category = "UTILITY" | "MARKETING";
+
 const STATUS_BADGE: Record<
   TemplateDto["status"],
-  { label: string; variant: "secondary" | "warning" | "success" | "destructive" }
+  { label: string; variant: "secondary" | "warning" | "success" | "destructive"; hint: string }
 > = {
-  draft: { label: "Borrador", variant: "secondary" },
-  pending: { label: "Pendiente de Meta", variant: "warning" },
-  approved: { label: "Aprobada", variant: "success" },
-  rejected: { label: "Rechazada", variant: "destructive" },
+  draft: { label: "Borrador", variant: "secondary", hint: "Guardada, todavía sin enviar a Meta." },
+  pending: { label: "En revisión", variant: "warning", hint: "Meta la está revisando. Suele tardar de unos minutos a 24 horas." },
+  approved: { label: "Aprobada", variant: "success", hint: "Lista para usar desde la Bandeja o desde Contactos." },
+  rejected: { label: "Rechazada", variant: "destructive", hint: "Corrígela y créala de nuevo con otro nombre." },
 };
 
+const CATEGORY: Record<Category, { label: string; description: string }> = {
+  UTILITY: {
+    label: "Utilidad",
+    description: "Seguimiento de algo que el cliente pidió: una cita, una cotización, un pedido.",
+  },
+  MARKETING: {
+    label: "Marketing",
+    description: "Promociones, ofertas, invitaciones o volver a contactar a quien no compró.",
+  },
+};
+
+/** Puntos de partida: rellenan el formulario, el dueño los ajusta a su negocio. */
+const STARTERS: {
+  title: string;
+  name: string;
+  category: Category;
+  body: string;
+  examples: string[];
+}[] = [
+  {
+    title: "Seguimiento de cotización",
+    name: "seguimiento_cotizacion",
+    category: "UTILITY",
+    body: "Hola {{1}}, te escribo para dar seguimiento a la cotización que te enviamos. ¿Tienes alguna duda o quieres que la revisemos juntos?",
+    examples: ["Ana"],
+  },
+  {
+    title: "Recordatorio de cita",
+    name: "recordatorio_cita",
+    category: "UTILITY",
+    body: "Hola {{1}}, te recordamos tu cita del {{2}} a las {{3}}. Si necesitas cambiarla, responde a este mensaje.",
+    examples: ["Ana", "martes 14 de octubre", "10:30"],
+  },
+  {
+    title: "Retomar la conversación",
+    name: "retomar_conversacion",
+    category: "MARKETING",
+    body: "Hola {{1}}, ¿sigues interesado en {{2}}? Esta semana tenemos lugares disponibles. Responde a este mensaje y te ayudamos.",
+    examples: ["Ana", "la limpieza dental"],
+  },
+];
+
+/** Meta solo acepta minúsculas, números y guion bajo en el nombre. */
+function normalizeName(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\s-]+/g, "_")
+    .replace(/[^a-z0-9_]/g, "");
+}
+
 export function TemplatesClient() {
-  const [templates, setTemplates] = useState<TemplateDto[]>([]);
+  const [templates, setTemplates] = useState<TemplateDto[] | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   const refetch = useCallback(async () => {
     const res = await fetch("/api/templates").catch(() => null);
-    if (!res?.ok) return;
+    if (!res?.ok) {
+      setTemplates((current) => current ?? []);
+      return;
+    }
     const data = (await res.json()) as { templates: TemplateDto[] };
     setTemplates(data.templates);
   }, []);
@@ -74,70 +157,234 @@ export function TemplatesClient() {
     void refetch().then(() => sync({ silent: true }));
   }, [refetch, sync]);
 
+  const empty = templates !== null && templates.length === 0;
+
   return (
     <div className="max-w-3xl space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <p className="text-sm text-muted-foreground">
-          Las plantillas permiten reabrir conversaciones con la ventana de 24 h
-          cerrada. Meta las aprueba en horas o días y puede reclasificar la
-          categoría (lo que cambia el costo por conversación). Esta pantalla
-          consulta el estado a Meta cada vez que la abres; Sincronizar fuerza
-          la consulta sin recargar.
-        </p>
-        <Button variant="outline" size="sm" disabled={syncing} onClick={() => void sync()}>
-          <RefreshCw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
-          Sincronizar
-        </Button>
-      </div>
-      {syncMsg && <p className="text-xs text-muted-foreground">{syncMsg}</p>}
+      <HowItWorks defaultOpen={empty} />
 
-      <CreateForm onCreated={() => void refetch()} />
-
-      <div className="space-y-2">
-        {templates.map((t) => (
-          <div key={t.id} className="rounded-lg border bg-card p-4">
-            <div className="flex items-center justify-between gap-3">
-              <p className="font-mono text-sm font-medium">
-                {t.name}{" "}
-                <span className="text-muted-foreground">
-                  ({t.language} · {t.category})
-                </span>
-              </p>
-              <Badge variant={STATUS_BADGE[t.status].variant}>
-                {STATUS_BADGE[t.status].label}
-              </Badge>
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">{t.body}</p>
-            {t.status === "rejected" && t.rejectionReason && (
-              <p className="mt-2 text-xs text-destructive">
-                Razón del rechazo: {t.rejectionReason}
-              </p>
+      <section className="space-y-3" aria-labelledby="tpl-list-title">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h3 id="tpl-list-title" className="text-base font-semibold">
+            Tus plantillas
+          </h3>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={syncing}
+              onClick={() => void sync()}
+              title="Consulta a Meta el estado de revisión"
+            >
+              <RefreshCw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+              Actualizar estado
+            </Button>
+            {!creating && (
+              <Button size="sm" onClick={() => setCreating(true)}>
+                <Plus className="h-4 w-4" />
+                Nueva plantilla
+              </Button>
             )}
           </div>
-        ))}
-        {templates.length === 0 && (
-          <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-            Sin plantillas todavía. Crea la primera arriba — por ejemplo un
-            «seguimos disponibles, ¿retomamos tu cotización?» para
-            conversaciones frías.
-          </p>
+        </div>
+        {syncMsg && <p className="text-xs text-muted-foreground">{syncMsg}</p>}
+
+        {creating && (
+          <CreateForm
+            onCancel={() => setCreating(false)}
+            onCreated={() => {
+              setCreating(false);
+              void refetch();
+            }}
+          />
         )}
-      </div>
+
+        {templates === null ? (
+          <p className="text-sm text-muted-foreground">Cargando plantillas…</p>
+        ) : empty ? (
+          !creating && (
+            <EmptyState
+              icon={FileText}
+              className="rounded-lg border border-dashed"
+              title="Todavía no tienes plantillas"
+              description="Crea la primera para poder escribirle a un cliente cuando pasen las 24 horas. Puedes empezar con un ejemplo."
+              action={
+                <Button size="sm" onClick={() => setCreating(true)}>
+                  <Plus className="h-4 w-4" />
+                  Crear mi primera plantilla
+                </Button>
+              }
+            />
+          )
+        ) : (
+          <ul className="space-y-2">
+            {templates.map((t) => (
+              <li key={t.id} className="rounded-lg border bg-card p-4">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="break-all font-mono text-sm font-medium">{t.name}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {templateLanguageName(t.language)} ·{" "}
+                      {CATEGORY[t.category as Category]?.label ?? t.category}
+                    </p>
+                  </div>
+                  <Badge variant={STATUS_BADGE[t.status].variant}>
+                    {STATUS_BADGE[t.status].label}
+                  </Badge>
+                </div>
+                <p className="mt-3 whitespace-pre-wrap text-sm">{t.body}</p>
+                <p
+                  className={cn(
+                    "mt-3 text-xs",
+                    t.status === "rejected" ? "text-destructive" : "text-muted-foreground"
+                  )}
+                >
+                  {t.status === "rejected" && t.rejectionReason
+                    ? `Motivo del rechazo: ${t.rejectionReason}. ${STATUS_BADGE.rejected.hint}`
+                    : STATUS_BADGE[t.status].hint}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }
 
-function CreateForm({ onCreated }: { onCreated: () => void }) {
+/** La explicación: para qué sirven, cómo se aprueban y dónde se usan. */
+function HowItWorks({ defaultOpen }: { defaultOpen: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  // Se abre sola la primera vez que la lista llega vacía.
+  useEffect(() => {
+    if (defaultOpen) setOpen(true);
+  }, [defaultOpen]);
+
+  const steps = [
+    {
+      icon: Plus,
+      title: "Créala aquí",
+      text: "Escribe el mensaje y marca con {{1}}, {{2}}… lo que cambia en cada envío, como el nombre o la fecha.",
+    },
+    {
+      icon: Clock3,
+      title: "Meta la revisa",
+      text: "Tarda de unos minutos a 24 horas. El estado cambia solo a «Aprobada» o «Rechazada», con el motivo.",
+    },
+    {
+      icon: Send,
+      title: "Úsala",
+      text: "En la Bandeja, cuando la ventana de 24 h está cerrada, elígela, llena las variables y envía. Para escribirle primero a alguien, usa «Escribir primero» en Contactos.",
+    },
+  ];
+
+  return (
+    <section className="rounded-lg border bg-card">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-3 p-4 text-left"
+      >
+        <Sparkles className="h-5 w-5 shrink-0 text-primary" />
+        <span className="flex-1">
+          <span className="block text-sm font-semibold">¿Para qué sirven las plantillas?</span>
+          <span className="block text-xs text-muted-foreground">
+            Son el único mensaje que WhatsApp te deja enviar pasadas 24 horas.
+          </span>
+        </span>
+        <ChevronDown className={cn("h-4 w-4 shrink-0 transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div className="space-y-4 border-t p-4 text-sm">
+          <p className="text-muted-foreground">
+            WhatsApp solo te deja escribir con libertad durante las 24 horas
+            que siguen al último mensaje de tu cliente. Pasado ese tiempo —o
+            para escribirle a alguien que nunca te ha escrito— necesitas un
+            mensaje que Meta haya aprobado antes: una plantilla.
+          </p>
+          <ol className="grid gap-3 sm:grid-cols-3">
+            {steps.map((s, i) => (
+              <li key={s.title} className="rounded-md border bg-background p-3">
+                <p className="flex items-center gap-2 font-medium">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
+                    {i + 1}
+                  </span>
+                  {s.title}
+                </p>
+                <p className="mt-1.5 text-xs text-muted-foreground">{s.text}</p>
+              </li>
+            ))}
+          </ol>
+          <details className="rounded-md bg-subtle p-3">
+            <summary className="cursor-pointer font-medium">Consejos para que Meta la apruebe</summary>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+              <li>No empieces ni termines el mensaje con una variable, y no pongas dos variables juntas.</li>
+              <li>Di quién escribe y por qué: «Hola {"{{1}}"}, soy Ana de Clínica Sol…».</li>
+              <li>Escribe ejemplos reales para cada variable: es lo que ve quien la revisa.</li>
+              <li>Utilidad es solo para dar seguimiento a algo que el cliente pidió. Si el mensaje promociona algo, Meta la cambia a Marketing, que cuesta más por conversación.</li>
+              <li>El idioma que elijas debe ser el del texto.</li>
+            </ul>
+          </details>
+          <p className="flex flex-wrap gap-4 text-xs">
+            <Link className="inline-flex items-center gap-1 underline" href="/inbox">
+              <Inbox className="h-3.5 w-3.5" /> Ir a la Bandeja
+            </Link>
+            <Link className="inline-flex items-center gap-1 underline" href="/contacts">
+              <Send className="h-3.5 w-3.5" /> Ir a Contactos
+            </Link>
+          </p>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CreateForm({
+  onCreated,
+  onCancel,
+}: {
+  onCreated: () => void;
+  onCancel: () => void;
+}) {
   const [name, setName] = useState("");
-  const [language, setLanguage] = useState("es_MX");
-  const [category, setCategory] = useState<"UTILITY" | "MARKETING">("UTILITY");
+  const [language, setLanguage] = useState(DEFAULT_TEMPLATE_LANGUAGE);
+  const [category, setCategory] = useState<Category>("UTILITY");
   const [body, setBody] = useState("");
+  const [examples, setExamples] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Misma validación que el servidor: avisa antes de gastar una llamada a Meta.
   const bodyError = body.trim() ? validateBodyVariables(body) : null;
-  const variableCount = countVariables(body);
+  const variableCount = bodyError ? 0 : countVariables(body);
+  const warnings = bodyError ? [] : templateWarnings(body);
+  const preview = renderBody(
+    body,
+    Array.from({ length: variableCount }, (_, i) => examples[i]?.trim() || `[variable ${i + 1}]`)
+  );
+
+  function applyStarter(s: (typeof STARTERS)[number]) {
+    setName(s.name);
+    setCategory(s.category);
+    setBody(s.body);
+    setExamples(s.examples);
+    setError(null);
+  }
+
+  /** Inserta la siguiente variable donde está el cursor. */
+  function insertVariable() {
+    const next = `{{${countVariables(body) + 1}}}`;
+    const el = document.getElementById("tpl-body") as HTMLTextAreaElement | null;
+    const start = el?.selectionStart ?? body.length;
+    const end = el?.selectionEnd ?? body.length;
+    const value = body.slice(0, start) + next + body.slice(end);
+    setBody(value);
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(start + next.length, start + next.length);
+    });
+  }
 
   async function create() {
     setSaving(true);
@@ -145,7 +392,13 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
     const res = await fetch("/api/templates", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name, language, category, body }),
+      body: JSON.stringify({
+        name,
+        language,
+        category,
+        body,
+        examples: examples.slice(0, variableCount),
+      }),
     }).catch(() => null);
     setSaving(false);
     if (!res?.ok) {
@@ -155,8 +408,6 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
       setError(data?.error?.message ?? "No se pudo crear la plantilla");
       return;
     }
-    setName("");
-    setBody("");
     onCreated();
   }
 
@@ -165,79 +416,171 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
       <CardHeader>
         <CardTitle>Nueva plantilla</CardTitle>
         <CardDescription>
-          Cuerpo con las variables que necesites: numéralas{" "}
-          <code>{"{{1}}"}</code>, <code>{"{{2}}"}</code>, <code>{"{{3}}"}</code>
-          … en orden y sin saltos. Se envía a aprobación de Meta al crearla.
+          Se envía a revisión de Meta al crearla. Mientras la revisan puedes
+          seguir usando el CRM.
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-4 md:grid-cols-3">
+      <CardContent className="space-y-5">
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-muted-foreground">Empieza con un ejemplo (opcional)</p>
+          <div className="flex flex-wrap gap-2">
+            {STARTERS.map((s) => (
+              <Button key={s.name} type="button" variant="outline" size="sm" onClick={() => applyStarter(s)}>
+                {s.title}
+              </Button>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1.5">
-            <Label htmlFor="tpl-name">Nombre</Label>
+            <Label htmlFor="tpl-name">Nombre interno</Label>
             <Input
               id="tpl-name"
               placeholder="seguimiento_cotizacion"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => setName(normalizeName(e.target.value))}
+              maxLength={60}
             />
+            <p className="text-xs text-muted-foreground">
+              Solo minúsculas, números y guion bajo. Tus clientes no lo ven.
+            </p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="tpl-lang">Idioma</Label>
+            <Label htmlFor="tpl-lang">Idioma del mensaje</Label>
             <select
               id="tpl-lang"
               value={language}
               onChange={(e) => setLanguage(e.target.value)}
               className="flex h-9 w-full rounded-md border border-input bg-card px-3 text-sm"
             >
-              <option value="es_MX">es_MX</option>
-              <option value="es">es</option>
-              <option value="es_AR">es_AR</option>
-              <option value="en_US">en_US</option>
-            </select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="tpl-cat">Categoría</Label>
-            <select
-              id="tpl-cat"
-              value={category}
-              onChange={(e) =>
-                setCategory(e.target.value as "UTILITY" | "MARKETING")
-              }
-              className="flex h-9 w-full rounded-md border border-input bg-card px-3 text-sm"
-            >
-              <option value="UTILITY">UTILITY (seguimiento)</option>
-              <option value="MARKETING">MARKETING</option>
+              {TEMPLATE_LANGUAGE_GROUPS.map((g) => (
+                <optgroup key={g.id} label={g.label}>
+                  {TEMPLATE_LANGUAGES.filter((l) => l.group === g.id).map((l) => (
+                    <option key={l.code} value={l.code}>
+                      {l.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
             </select>
           </div>
         </div>
+
+        <fieldset className="space-y-1.5">
+          <legend className="text-sm font-medium">¿Para qué es?</legend>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {(Object.keys(CATEGORY) as Category[]).map((c) => (
+              <label
+                key={c}
+                className={cn(
+                  "cursor-pointer rounded-md border p-3 text-sm transition-colors",
+                  category === c ? "border-primary bg-brand-tint" : "hover:bg-accent"
+                )}
+              >
+                <input
+                  type="radio"
+                  name="tpl-category"
+                  value={c}
+                  checked={category === c}
+                  onChange={() => setCategory(c)}
+                  className="sr-only"
+                />
+                <span className="block font-medium">{CATEGORY[c].label}</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">{CATEGORY[c].description}</span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+
         <div className="space-y-1.5">
-          <Label htmlFor="tpl-body">Cuerpo</Label>
+          <div className="flex items-end justify-between gap-2">
+            <Label htmlFor="tpl-body">Mensaje</Label>
+            <Button type="button" variant="ghost" size="sm" onClick={insertVariable}>
+              <Plus className="h-3.5 w-3.5" />
+              Insertar variable {`{{${countVariables(body) + 1}}}`}
+            </Button>
+          </div>
           <Textarea
             id="tpl-body"
-            rows={3}
-            placeholder="Hola {{1}}, te confirmo tu sesión el {{2}} a las {{3}}."
+            rows={4}
+            placeholder="Hola {{1}}, te confirmo tu sesión el {{2}} a las {{3}}. Si necesitas moverla, responde a este mensaje."
             value={body}
             onChange={(e) => setBody(e.target.value)}
           />
           {bodyError ? (
             <p className="text-xs text-destructive">{bodyError}</p>
           ) : (
-            variableCount > 0 && (
-              <p className="text-xs text-muted-foreground">
-                {variableCount === 1
-                  ? "1 variable: al enviar pedirá su valor."
-                  : `${variableCount} variables: al enviar pedirá los ${variableCount} valores.`}
-              </p>
-            )
+            <p className="text-xs text-muted-foreground">
+              Las variables se llenan al enviar: {"{{1}}"} puede ser el nombre
+              del cliente, {"{{2}}"} una fecha…
+            </p>
           )}
+          {warnings.map((w) => (
+            <p key={w} className="flex items-start gap-1.5 text-xs text-warning-text">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {w}
+            </p>
+          ))}
         </div>
+
+        {variableCount > 0 && (
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Ejemplo de cada variable</p>
+            <p className="text-xs text-muted-foreground">
+              Meta los usa para revisar la plantilla. No se envían a tus clientes.
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {Array.from({ length: variableCount }, (_, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Label htmlFor={`tpl-example-${i + 1}`} className="w-10 shrink-0 font-mono text-xs">
+                    {`{{${i + 1}}}`}
+                  </Label>
+                  <Input
+                    id={`tpl-example-${i + 1}`}
+                    placeholder={i === 0 ? "Ana" : "p. ej. martes 14"}
+                    value={examples[i] ?? ""}
+                    onChange={(e) => {
+                      const next = [...examples];
+                      next[i] = e.target.value;
+                      setExamples(next);
+                    }}
+                    maxLength={200}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {body.trim() && !bodyError && (
+          <div className="space-y-1.5">
+            <p className="text-sm font-medium">Así lo verá tu cliente</p>
+            <div className="rounded-lg bg-chat p-4">
+              <div className="ml-auto max-w-[85%] rounded-lg border border-bubble-out-border bg-bubble-out px-3 py-2 text-sm text-bubble-out-text shadow-sm">
+                <p className="whitespace-pre-wrap">{preview}</p>
+                <p className="mt-1 text-right text-[10px] opacity-60">10:30</p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {error && <p className="text-sm text-destructive">{error}</p>}
-        <Button
-          disabled={saving || !name.trim() || !body.trim() || bodyError !== null}
-          onClick={() => void create()}
-        >
-          {saving ? "Enviando a Meta…" : "Crear y enviar a aprobación"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            disabled={saving || !name.trim() || !body.trim() || bodyError !== null}
+            onClick={() => void create()}
+          >
+            {saving ? "Enviando a Meta…" : "Crear y enviar a revisión"}
+          </Button>
+          <Button variant="outline" disabled={saving} onClick={onCancel}>
+            Cancelar
+          </Button>
+        </div>
+        <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+          <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          Cuando Meta la apruebe aparecerá en la Bandeja, lista para enviar.
+        </p>
       </CardContent>
     </Card>
   );

@@ -1,12 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Sparkles, Trash2 } from "lucide-react";
+import Link from "next/link";
+import { Cable, Plus, Sparkles, Trash2 } from "lucide-react";
+import { BrainStatusCard } from "@/components/agent/brain-status-card";
+import {
+  externalAnswerLabel,
+  externalAnswering,
+  externalDown,
+  type BrainStatusDto,
+} from "@/lib/brain-status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 
 type Profile = {
@@ -29,27 +38,45 @@ type KbEntry = {
 export function AgentClient() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [aiConfigured, setAiConfigured] = useState(true);
+  const [aiMensaje, setAiMensaje] = useState<string | null>(null);
   const [entries, setEntries] = useState<KbEntry[]>([]);
   const [kbSize, setKbSize] = useState<{ chars: number; warnAt: number; warning: boolean } | null>(null);
   const [saved, setSaved] = useState(false);
+  // «Quién responde»: se refresca solo, porque la última llamada del cerebro
+  // externo y su /health cambian sin que nadie toque esta pantalla.
+  const [brain, setBrain] = useState<BrainStatusDto | null>(null);
+
+  const loadBrain = useCallback(async () => {
+    const b = await fetch("/api/agent/brain-status")
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+    setBrain(b);
+  }, []);
 
   const refetch = useCallback(async () => {
     const [p, kb, size] = await Promise.all([
       fetch("/api/agent/profile").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/kb").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/kb/size").then((r) => (r.ok ? r.json() : null)),
+      loadBrain(),
     ]).catch(() => [null, null, null]);
     if (p) {
       setProfile(p.profile);
       setAiConfigured(p.aiConfigured);
+      setAiMensaje(p.aiMensaje ?? null);
     }
     if (kb) setEntries(kb.entries);
     if (size) setKbSize(size);
-  }, []);
+  }, [loadBrain]);
 
   useEffect(() => {
     void refetch();
   }, [refetch]);
+
+  useEffect(() => {
+    const id = setInterval(() => void loadBrain(), 30_000);
+    return () => clearInterval(id);
+  }, [loadBrain]);
 
   if (!profile) {
     return (
@@ -70,44 +97,76 @@ export function AgentClient() {
     void refetch();
   }
 
+  // Sin token de IA, este aviso pedía configurarlo aunque contestara un
+  // cerebro externo, y eso mentía. Con uno contestando, se dice eso; con uno
+  // caído, ya lo dice la tarjeta de arriba.
+  const aiCallout = aiConfigured
+    ? null
+    : brain && externalAnswering(brain)
+      ? "externo"
+      : brain && externalDown(brain)
+        ? null
+        : "configurar";
+
   return (
     <div className="h-full overflow-y-auto">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3 sm:px-6 sm:py-4">
-        <h2 className="font-semibold">Agente de IA</h2>
+        <h2 className="text-[17px] font-bold tracking-tight">Agente de IA</h2>
         <div className="flex items-center gap-3">
           {saved && <span className="text-xs text-primary">Guardado ✓</span>}
           <span className="text-sm text-muted-foreground">
             {profile.enabled ? "Encendido" : "Apagado"}
           </span>
-          <button
-            role="switch"
-            aria-checked={profile.enabled}
-            aria-label="Agente encendido"
-            disabled={!aiConfigured}
-            onClick={() => void saveProfile({ enabled: !profile.enabled })}
-            className={`relative h-6 w-11 rounded-full transition-colors disabled:opacity-40 ${
-              profile.enabled ? "bg-primary" : "bg-secondary"
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 h-5 w-5 rounded-full bg-knob transition-transform ${
-                profile.enabled ? "translate-x-5" : "translate-x-0.5"
-              }`}
-            />
-          </button>
+          {/* El interruptor compartido (#53): el pomo propio de aquí era
+              `absolute` sin `left`, arrancaba del centro de la pista y
+              encendido quedaba afuera. */}
+          {/* Encender exige IA; APAGAR se puede siempre. Con la llave pausada
+              (#85) el agente sigue «encendido» sin poder pensar, y un
+              interruptor bloqueado dejaría al dueño sin forma de callarlo. */}
+          <Switch
+            checked={profile.enabled}
+            disabled={!aiConfigured && !profile.enabled}
+            label="Agente encendido"
+            onCheckedChange={(enabled) => void saveProfile({ enabled })}
+          />
         </div>
       </header>
 
-      {!aiConfigured && (
+      {brain && (
+        <div className="mx-4 mt-4 sm:mx-6 sm:mt-6">
+          <BrainStatusCard status={brain} />
+        </div>
+      )}
+
+      {aiCallout === "externo" && brain && (
+        <div className="mx-4 mt-4 rounded-lg border border-brand-soft bg-brand-tint p-5 text-center sm:mx-6 sm:mt-6 sm:p-6">
+          <Cable className="mx-auto mb-2 h-8 w-8 text-primary" strokeWidth={1.7} />
+          <p className="font-medium">{externalAnswerLabel(brain)}</p>
+          <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+            No necesitas el agente incluido: el comportamiento y el conocimiento
+            que dejes aquí abajo quedan disponibles para tu cerebro externo por
+            la API.
+          </p>
+        </div>
+      )}
+      {aiCallout === "configurar" && (
         <div className="mx-4 mt-4 rounded-lg border border-brand-soft bg-brand-tint p-5 text-center sm:mx-6 sm:mt-6 sm:p-6">
           <Sparkles className="mx-auto mb-2 h-8 w-8 text-primary" />
-          <p className="font-medium">Configura tu proveedor de IA para activar el agente</p>
-          <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-            Agrega <code className="rounded bg-secondary px-1">OPENROUTER_API_TOKEN</code> y{" "}
-            <code className="rounded bg-secondary px-1">OPENROUTER_MODEL</code> a las variables
-            de entorno de la instancia y reiníciala. Mientras tanto puedes dejar listo el
-            comportamiento y el conocimiento aquí abajo.
+          <p className="font-medium">
+            {aiMensaje ? "Tu agente no puede contestar" : "Configura tu proveedor de IA para activar el agente"}
           </p>
+          <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+            {aiMensaje ??
+              "Elige el proveedor, el modelo y pega tu llave: sin reiniciar nada."}{" "}
+            Mientras tanto puedes dejar listo el comportamiento y el conocimiento aquí
+            abajo.
+          </p>
+          <Link
+            href="/settings/ai"
+            className="mt-3 inline-block text-sm font-medium text-brand-text underline underline-offset-2"
+          >
+            Ir a Ajustes → IA →
+          </Link>
         </div>
       )}
 

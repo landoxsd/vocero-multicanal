@@ -3,9 +3,16 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { MessageSquareText, X } from "lucide-react";
-import type { FichaDto, FichaValue, PriorityValue, StageDto } from "@/lib/types";
+import type {
+  AnuncioDto,
+  FichaDto,
+  FichaValue,
+  PriorityValue,
+  StageDto,
+} from "@/lib/types";
 import { formatMoneyCents, parseMoneyToCents } from "@/lib/money";
 import { cn, formatPhone } from "@/lib/utils";
+import { AnuncioOrigen } from "@/components/anuncio-origen";
 import { ContactAvatar } from "@/components/avatar";
 import { FichaPanel } from "@/components/ficha-panel";
 import { Button } from "@/components/ui/button";
@@ -41,6 +48,8 @@ export function LeadDrawer({
   onPriority: (value: PriorityValue | null) => void;
 }) {
   const [ficha, setFicha] = useState<FichaDto>({});
+  // 018: de qué anuncio llegó; null si escribió por su cuenta.
+  const [anuncio, setAnuncio] = useState<AnuncioDto | null>(null);
   const [monto, setMonto] = useState("");
   const [editandoMonto, setEditandoMonto] = useState(false);
 
@@ -52,7 +61,11 @@ export function LeadDrawer({
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null);
     setFicha(detail?.contact?.ficha ?? {});
+    setAnuncio(detail?.anuncio ?? null);
   }, [contactId]);
+
+  // Al abrir otro trato no puede asomarse el anuncio del anterior.
+  useEffect(() => setAnuncio(null), [contactId]);
 
   useEffect(() => {
     setEditandoMonto(false);
@@ -104,10 +117,10 @@ export function LeadDrawer({
         role="dialog"
         aria-modal="true"
         aria-label={`Trato de ${lead.contact.name}`}
-        className="fixed inset-y-0 right-0 z-50 flex w-[min(360px,92vw)] flex-col border-l bg-background shadow-pop"
+        className="fixed inset-y-0 right-0 z-50 flex w-[min(360px,92vw)] flex-col border-l bg-popover shadow-pop"
       >
         <header className="flex items-center justify-between border-b px-4 py-3">
-          <h3 className="text-[13px] font-[650] uppercase tracking-wide text-text-2">
+          <h3 className="kicker text-text-2">
             Trato
           </h3>
           <button
@@ -148,11 +161,17 @@ export function LeadDrawer({
                 Todavía no hay conversación con este contacto.
               </p>
             )}
+
+            {anuncio && (
+              <div className="mt-3">
+                <AnuncioOrigen anuncio={anuncio} />
+              </div>
+            )}
           </section>
 
           {/* Cuánto */}
           <section className="border-b p-4">
-            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-3">
+            <p className="mb-2 kicker">
               Monto ({moneda})
             </p>
             {editandoMonto ? (
@@ -219,7 +238,7 @@ export function LeadDrawer({
 
           {/* A quién llamar primero */}
           <section className="border-b p-4">
-            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-3">
+            <p className="mb-2 kicker">
               Prioridad
             </p>
             <PriorityPicker value={lead.priority} onChange={onPriority} />
@@ -227,7 +246,7 @@ export function LeadDrawer({
 
           {/* Dónde va */}
           <section className="border-b p-4">
-            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-3">
+            <p className="mb-2 kicker">
               Etapa
             </p>
             <div className="flex flex-wrap gap-1.5">

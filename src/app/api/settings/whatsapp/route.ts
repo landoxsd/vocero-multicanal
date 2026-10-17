@@ -1,11 +1,21 @@
 import { z } from "zod";
 import { apiError, parseBody, withAuth } from "@/lib/api";
 import {
+  desconectarCanal,
   getCredentialsByOrg,
   saveCredentials,
   tokenLast4,
 } from "@/server/whatsapp/credentials";
-import { subscribeAppToWaba, testConnection } from "@/server/whatsapp/connect";
+import {
+  registerWebhookForNumber,
+  testConnection,
+  unregisterWebhookForNumber,
+} from "@/server/whatsapp/connect";
+import {
+  webhookPath,
+  webhookUrl,
+  webhookVerifyToken,
+} from "@/server/whatsapp/webhook-url";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +40,15 @@ const putSchema = z.object({
   token: z.string().trim().min(1),
 });
 
-/** Guarda la conexión: re-valida contra Meta, cifra y suscribe (FR-040). */
+/**
+ * Guarda la conexión: re-valida contra Meta, cifra (FR-040) y registra el
+ * webhook de esta instancia en el número.
+ *
+ * Antes el CRM solo suscribía la app a la WABA y la URL había que pegarla a
+ * mano en el panel de Meta. Si Meta rechaza el registro, la conexión YA está
+ * guardada y es válida: se avisa en `webhook` y la tarjeta del webhook ofrece
+ * reintentar (o pegar la URL a mano, que sigue a la vista).
+ */
 export const PUT = withAuth(async (session, req: Request) => {
   const body = await parseBody(req, putSchema);
   if (!body.ok) return body.response;
@@ -50,11 +68,40 @@ export const PUT = withAuth(async (session, req: Request) => {
     verifiedName: check.verifiedName,
   });
 
-  // Best-effort: necesaria en modo directo; el modo agencia usa su override.
-  await subscribeAppToWaba(body.data.wabaId, body.data.token);
+  const webhook = await registerWebhookForNumber({
+    wabaId: body.data.wabaId,
+    phoneNumberId: body.data.phoneNumberId,
+    token: body.data.token,
+    webhookUrl: webhookUrl("wa"),
+    verifyToken: webhookVerifyToken(),
+  });
 
   return Response.json({
     ok: true,
     displayPhoneNumber: check.displayPhoneNumber,
+    webhook,
   });
+});
+
+/**
+ * Desconectar el número. Sin esto, conectar era una calle de un solo
+ * sentido: la unicidad del número impedía moverlo a otra instancia y no había
+ * pantalla donde soltarlo.
+ *
+ * Primero quita el override del webhook que puso el guardado —con el token
+ * todavía a mano; sin él no se podría— y después borra las credenciales. No
+ * borra la bandeja: las conversaciones son de la organización, no de la
+ * conexión. Idempotente: sin conexión responde 200 igual.
+ */
+export const DELETE = withAuth(async (session) => {
+  const creds = await getCredentialsByOrg(session.organizationId);
+  if (creds) {
+    await unregisterWebhookForNumber({
+      phoneNumberId: creds.phoneNumberId,
+      token: creds.token,
+      webhookPath: webhookPath("wa"),
+    });
+  }
+  await desconectarCanal(session.organizationId);
+  return Response.json({ ok: true });
 });

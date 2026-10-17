@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
  * Búsqueda tolerante en SQL, espejo de `matchesQuery` del cliente:
  * - nombre sin acentos ni mayúsculas (`translate`, sin depender de la
  *   extensión `unaccent`, que exigiría privilegios en la BD);
- * - teléfono por DÍGITOS, para poder teclearlo como se ve ("+52 462 134…").
+ * - teléfono por DÍGITOS, para poder teclearlo como se ve ("+52 555 000…").
  */
 const UNACCENT_FROM = "áàäâãéèëêíìïîóòöôõúùüûñçÁÀÄÂÃÉÈËÊÍÌÏÎÓÒÖÔÕÚÙÜÛÑÇ";
 const UNACCENT_TO = "aaaaaeeeeiiiiooooouuuuncAAAAAEEEEIIIIOOOOOUUUUNC";
@@ -137,8 +137,16 @@ export const POST = withAuth(async (session, req: Request) => {
       notes: body.data.notes ?? null,
       source: body.data.source ?? null,
     })
+    // El canal entra en el target porque entra en el índice único desde 014
+    // (`contact_org_channel_identity_uq`). Postgres exige que el ON CONFLICT
+    // nombre EXACTAMENTE las columnas de un índice existente: sin `channel`,
+    // el alta manual falla con "no unique or exclusion constraint matching".
     .onConflictDoNothing({
-      target: [schema.contact.organizationId, schema.contact.waIdentity],
+      target: [
+        schema.contact.organizationId,
+        schema.contact.channel,
+        schema.contact.waIdentity,
+      ],
     })
     .returning();
   if (!inserted[0]) {

@@ -1,5 +1,5 @@
 {
-  "id": "99e63634-fe8d-47d6-9be7-96ef5a90c1d0",
+  "id": "a0eeb00d-456e-43de-8fa9-471f3676d054",
   "prevId": "e3ece8e8-09fd-474a-a25c-254150b3e735",
   "version": "7",
   "dialect": "postgresql",
@@ -458,169 +458,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.channel_account": {
-      "name": "channel_account",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "organization_id": {
-          "name": "organization_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "provider": {
-          "name": "provider",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'disconnected'"
-        },
-        "phone_number": {
-          "name": "phone_number",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "account_identifier": {
-          "name": "account_identifier",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "qr_code": {
-          "name": "qr_code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "credentials_cipher": {
-          "name": "credentials_cipher",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "credentials_iv": {
-          "name": "credentials_iv",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "credentials_tag": {
-          "name": "credentials_tag",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "metadata": {
-          "name": "metadata",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "error_message": {
-          "name": "error_message",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_connected_at": {
-          "name": "last_connected_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "channel_org_idx": {
-          "name": "channel_org_idx",
-          "columns": [
-            {
-              "expression": "organization_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "channel_provider_idx": {
-          "name": "channel_provider_idx",
-          "columns": [
-            {
-              "expression": "organization_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "provider",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "channel_account_organization_id_organization_id_fk": {
-          "name": "channel_account_organization_id_organization_id_fk",
-          "tableFrom": "channel_account",
-          "tableTo": "organization",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.contact": {
       "name": "contact",
       "schema": "",
@@ -637,24 +474,12 @@
           "primaryKey": false,
           "notNull": true
         },
-        "channel_account_id": {
-          "name": "channel_account_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "platform": {
-          "name": "platform",
+        "channel": {
+          "name": "channel",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "default": "'whatsapp'"
-        },
-        "external_id": {
-          "name": "external_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         },
         "wa_identity": {
           "name": "wa_identity",
@@ -720,11 +545,17 @@
         }
       },
       "indexes": {
-        "contact_org_wa_identity_uq": {
-          "name": "contact_org_wa_identity_uq",
+        "contact_org_channel_identity_uq": {
+          "name": "contact_org_channel_identity_uq",
           "columns": [
             {
               "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "channel",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -797,19 +628,6 @@
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
-        },
-        "contact_channel_account_id_channel_account_id_fk": {
-          "name": "contact_channel_account_id_channel_account_id_fk",
-          "tableFrom": "contact",
-          "tableTo": "channel_account",
-          "columnsFrom": [
-            "channel_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -840,25 +658,25 @@
           "primaryKey": false,
           "notNull": true
         },
-        "channel_account_id": {
-          "name": "channel_account_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "platform": {
-          "name": "platform",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'whatsapp'"
-        },
         "is_test": {
           "name": "is_test",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "channel": {
+          "name": "channel",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'whatsapp'"
+        },
+        "channel_thread_ref": {
+          "name": "channel_thread_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "ai_enabled": {
           "name": "ai_enabled",
@@ -956,27 +774,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "conversation_channel_idx": {
-          "name": "conversation_channel_idx",
-          "columns": [
-            {
-              "expression": "organization_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "channel_account_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -1005,18 +802,159 @@
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.instagram_credentials": {
+      "name": "instagram_credentials",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
         },
-        "conversation_channel_account_id_channel_account_id_fk": {
-          "name": "conversation_channel_account_id_channel_account_id_fk",
-          "tableFrom": "conversation",
-          "tableTo": "channel_account",
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ig_user_id": {
+          "name": "ig_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "account_ref": {
+          "name": "account_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "username": {
+          "name": "username",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "token_cipher": {
+          "name": "token_cipher",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "token_iv": {
+          "name": "token_iv",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "token_tag": {
+          "name": "token_tag",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "webhook_secret": {
+          "name": "webhook_secret",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'connected'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "instagram_credentials_org_uq": {
+          "name": "instagram_credentials_org_uq",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "instagram_credentials_ig_user_uq": {
+          "name": "instagram_credentials_ig_user_uq",
+          "columns": [
+            {
+              "expression": "ig_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "instagram_credentials_account_ref_idx": {
+          "name": "instagram_credentials_account_ref_idx",
+          "columns": [
+            {
+              "expression": "account_ref",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "instagram_credentials_organization_id_organization_id_fk": {
+          "name": "instagram_credentials_organization_id_organization_id_fk",
+          "tableFrom": "instagram_credentials",
+          "tableTo": "organization",
           "columnsFrom": [
-            "channel_account_id"
+            "organization_id"
           ],
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -1886,26 +1824,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "channel_account_id": {
-          "name": "channel_account_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "platform": {
-          "name": "platform",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "wa_message_id": {
           "name": "wa_message_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "external_message_id": {
-          "name": "external_message_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -1962,12 +1882,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "metadata": {
-          "name": "metadata",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
         "wa_timestamp": {
           "name": "wa_timestamp",
           "type": "timestamp",
@@ -2009,27 +1923,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "message_channel_idx": {
-          "name": "message_channel_idx",
-          "columns": [
-            {
-              "expression": "organization_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "channel_account_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -2057,19 +1950,6 @@
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "message_channel_account_id_channel_account_id_fk": {
-          "name": "message_channel_account_id_channel_account_id_fk",
-          "tableFrom": "message",
-          "tableTo": "channel_account",
-          "columnsFrom": [
-            "channel_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         },
         "message_media_asset_id_media_asset_id_fk": {

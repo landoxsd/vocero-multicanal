@@ -1,11 +1,20 @@
+import {
+  BRAND_CYAN_ON_TILE,
+  BRAND_MARK_BODY,
+  BRAND_MARK_STROKE,
+  BRAND_MARK_TAIL,
+  isVoceroName,
+} from "./brand";
 import { resolveAccentSet, type Branding } from "./branding";
 
 /**
  * El icono de la pestaña, white-label.
  *
- * Toda instancia tiene uno **sin configurar nada**: se dibuja con la inicial
- * del nombre sobre el color de acento. Una agencia que despliega para su
- * cliente puede subir el logo real y reemplazarlo.
+ * Toda instancia tiene uno **sin configurar nada**: si se llama Vocero, es el
+ * logo de la marca (la "v" con remate cian sobre el mosaico azul, igual que en
+ * vocerocrm.com); con otro nombre se dibuja la inicial sobre el acento. Una
+ * agencia que despliega para su cliente puede subir el logo real y
+ * reemplazarlo.
  *
  * Que exista un respaldo generado no es un adorno: sin él, quien no suba nada
  * se queda con el icono genérico del navegador, y con cinco instancias abiertas
@@ -93,7 +102,8 @@ export function faviconInitial(name: string): string {
  * el servidor.
  */
 export function generatedFaviconSvg(branding: Branding): string {
-  const { accent, fg } = resolveAccentSet(branding.accent);
+  const { accent, hover, fg } = resolveAccentSet(branding.accent);
+  if (isVoceroName(branding.name)) return voceroFaviconSvg(accent, hover);
   const letra = faviconInitial(branding.name)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;");
@@ -107,6 +117,25 @@ export function generatedFaviconSvg(branding: Branding): string {
 }
 
 /**
+ * El favicon de vocerocrm.com, con el degradado en el acento de la instancia:
+ * una instancia llamada Vocero pero con otro color sigue viendo SU color.
+ * El trazo sale de `lib/brand`, el mismo que dibuja la barra lateral.
+ */
+function voceroFaviconSvg(from: string, to: string): string {
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">`,
+    `<defs><linearGradient id="g" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">`,
+    `<stop offset="0" stop-color="${from}"/><stop offset="1" stop-color="${to}"/>`,
+    `</linearGradient></defs>`,
+    `<rect width="64" height="64" rx="14" fill="url(#g)"/>`,
+    `<g transform="translate(5.6 5.6) scale(2.2)" fill="none" stroke-linecap="round">`,
+    `<path d="${BRAND_MARK_BODY}" stroke="#ffffff" stroke-width="${BRAND_MARK_STROKE}"/>`,
+    `<path d="${BRAND_MARK_TAIL}" stroke="${BRAND_CYAN_ON_TILE}" stroke-width="${BRAND_MARK_STROKE}"/>`,
+    `</g></svg>`,
+  ].join("");
+}
+
+/**
  * Sufijo de caché del icono.
  *
  * Los navegadores guardan el favicon con una insistencia notable: sin que la
@@ -114,7 +143,9 @@ export function generatedFaviconSvg(branding: Branding): string {
  * el número de versión; para el generado, un hash del nombre y el acento, que
  * son justo lo que lo cambia.
  */
-export function faviconCacheKey(branding: Branding): string {
+export function faviconCacheKey(
+  branding: Pick<Branding, "name" | "accent" | "favicon">
+): string {
   if (branding.favicon) return `u${branding.favicon.version}`;
   let h = 0;
   const semilla = `${branding.name}|${branding.accent}`;
@@ -125,6 +156,8 @@ export function faviconCacheKey(branding: Branding): string {
 }
 
 /** URL que va en el `<link rel="icon">`. */
-export function faviconHref(branding: Branding): string {
+export function faviconHref(
+  branding: Pick<Branding, "name" | "accent" | "favicon">
+): string {
   return `/api/branding/favicon?v=${faviconCacheKey(branding)}`;
 }

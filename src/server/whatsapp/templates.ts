@@ -7,6 +7,7 @@ import {
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { graphRequest, MetaApiError, normalizeRecipient } from "@/lib/meta/client";
+import { destinatarioMeta } from "@/lib/meta/destinatario";
 import { scoped } from "@/lib/db/tenant";
 import { publish } from "@/server/events/bus";
 import {
@@ -67,7 +68,14 @@ export function serializeTemplate(t: TemplateRow) {
 /** Crea la plantilla y la manda a aprobación de Meta (FR-050). */
 export async function createTemplate(
   organizationId: string,
-  input: { name: string; language: string; category: string; body: string }
+  input: {
+    name: string;
+    language: string;
+    category: string;
+    body: string;
+    /** Un ejemplo por variable, en orden; es lo que ve quien revisa en Meta. */
+    examples?: string[];
+  }
 ): Promise<TemplateRow> {
   const variableError = validateBodyVariables(input.body);
   if (variableError) throw new TemplateError("invalid", variableError);
@@ -86,11 +94,13 @@ export async function createTemplate(
     .replace(/[^a-z0-9_]/g, "");
   if (!name) throw new TemplateError("invalid", "Nombre de plantilla inválido");
 
-  // Meta pide un ejemplo por variable: si faltan, rechaza la plantilla.
+  // Meta pide un ejemplo por variable: si faltan, rechaza la plantilla. Uno
+  // realista («Ana», «martes 14») ayuda a que la aprueben; si el dueño no
+  // escribió alguno, va el genérico.
   const variableCount = countVariables(input.body);
   const examples = Array.from(
     { length: variableCount },
-    (_, i) => `ejemplo ${i + 1}`
+    (_, i) => input.examples?.[i]?.trim() || `ejemplo ${i + 1}`
   );
   let waTemplateId: string | null = null;
   try {
@@ -343,10 +353,13 @@ export async function sendTemplate(input: {
   }
 
   // 003: destinatario = teléfono normalizado o BSUID.
-  const templateRecipient = row.contact.phone
-    ? normalizeRecipient(row.contact.phone)
-    : row.contact.waUserId;
-  if (!templateRecipient) {
+  // 003: teléfono en `to`, BSUID en `recipient` — Meta los pide en campos
+  // distintos y mandar el BSUID en `to` devuelve 131026.
+  const destinatario = destinatarioMeta(
+    row.contact.phone ? normalizeRecipient(row.contact.phone) : null,
+    row.contact.waUserId
+  );
+  if (!destinatario) {
     throw new TemplateError(
       "meta_error",
       "El contacto no tiene teléfono ni identidad de WhatsApp utilizable"
@@ -355,7 +368,7 @@ export async function sendTemplate(input: {
 
   const waMessageId = await callGraphSend(creds, {
     messaging_product: "whatsapp",
-    to: templateRecipient,
+    ...destinatario,
     type: "template",
     template: {
       name: template.name,

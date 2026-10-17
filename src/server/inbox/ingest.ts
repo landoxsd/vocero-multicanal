@@ -5,6 +5,7 @@ import { normalizeMx } from "@/lib/meta/client";
 import { publish } from "@/server/events/bus";
 import { getCredentialsByPhoneNumberId } from "@/server/whatsapp/credentials";
 import { ensureAssetAvailable } from "@/server/whatsapp/media";
+import type { Channel } from "@/lib/channels";
 import type {
   WebhookMediaPayload,
   WebhookMessage,
@@ -16,6 +17,11 @@ import {
   type ResolvedIdentity,
 } from "@/server/inbox/identity";
 import { applyStatusUpdate } from "@/server/inbox/status";
+import {
+  anuncioDeWhatsapp,
+  type AnuncioDeOrigen,
+} from "@/server/attribution/referral";
+import { registrarAnuncioDeOrigen } from "@/server/attribution/store";
 import { onLeadActivity } from "@/server/inbox/lead-activity";
 import { maybeRunAgentTurn } from "@/server/ai/trigger";
 
@@ -30,6 +36,42 @@ const SUPPORTED_TYPES = new Set([
   "location",
   "contacts",
 ]);
+
+/** #78 — Respuestas de botón: entran como texto (ver `contenidoEntrante`). */
+const BUTTON_REPLY_TYPES = new Set(["button", "interactive"]);
+
+/**
+ * #78 — Lo que escribió el cliente, también cuando lo hizo tocando un botón.
+ *
+ * Cuando el cliente toca un botón de respuesta rápida de una plantilla, Meta
+ * manda `type: "button"` con el rótulo en `button.text`; cuando toca un botón
+ * o una fila de lista de un mensaje interactivo, `type: "interactive"` con el
+ * rótulo en `interactive.button_reply.title` o `interactive.list_reply.title`.
+ * Para el negocio eso es un texto del cliente: entra a la bandeja, abre la
+ * ventana de 24 h y dispara al agente igual que si lo hubiera tecleado. Se
+ * guarda como `text` con el rótulo; el `payload`/`id` del botón no, porque el
+ * mensaje no tiene campo para metadatos y el rótulo es lo que el cliente vio y
+ * eligió. Devuelve null si la respuesta no trae ni rótulo ni identificador
+ * (payload roto): quien llama la descarta con aviso, nunca revienta el webhook.
+ */
+export function contenidoEntrante(
+  msg: WebhookMessage
+): { type: string; text: string | null } | null {
+  if (msg.type === "button") {
+    const rotulo = limpio(msg.button?.text) ?? limpio(msg.button?.payload);
+    return rotulo ? { type: "text", text: rotulo } : null;
+  }
+  if (msg.type === "interactive") {
+    const reply = msg.interactive?.button_reply ?? msg.interactive?.list_reply;
+    const rotulo = limpio(reply?.title) ?? limpio(reply?.id);
+    return rotulo ? { type: "text", text: rotulo } : null;
+  }
+  return { type: msg.type, text: msg.text?.body ?? null };
+}
+
+function limpio(valor: unknown): string | null {
+  return typeof valor === "string" && valor.trim() ? valor.trim() : null;
+}
 
 /** Tipos con archivo binario en Graph (008). */
 const BINARY_MEDIA_TYPES = new Set([
@@ -162,12 +204,23 @@ export async function getOrCreateContact(
 
 export async function getOrCreateConversation(
   organizationId: string,
-  contactId: string
+  contactId: string,
+  opts?: { channel?: Channel; threadRef?: string | null }
 ) {
   const db = getDb();
   const inserted = await db
     .insert(schema.conversation)
-    .values({ id: newId("conversation"), organizationId, contactId })
+    .values({
+      id: newId("conversation"),
+      organizationId,
+      contactId,
+      channel: opts?.channel ?? "whatsapp",
+      channelThreadRef: opts?.threadRef ?? null,
+      // 027: hereda la pausa del contacto en el mismo INSERT. Si se leyera
+      // antes, cada mensaje entrante pagaría una consulta más, y entre la
+      // lectura y la inserción cabría el primer turno del agente.
+      aiEnabled: sql<boolean>`coalesce((select not c.ai_paused from contact c where c.id = ${contactId}), true)`,
+    })
     .onConflictDoNothing()
     .returning();
   if (inserted[0]) return inserted[0];
@@ -185,6 +238,15 @@ export async function getOrCreateConversation(
     .limit(1);
   const existing = rows[0];
   if (!existing) throw new Error("conversación no encontrada tras upsert");
+  // 014: el hilo de la plataforma puede aparecer despues (o cambiar); se
+  // guarda en cuanto se conoce para poder responder.
+  if (opts?.threadRef && existing.channelThreadRef !== opts.threadRef) {
+    await db
+      .update(schema.conversation)
+      .set({ channelThreadRef: opts.threadRef, updatedAt: new Date() })
+      .where(eq(schema.conversation.id, existing.id));
+    existing.channelThreadRef = opts.threadRef;
+  }
   return existing;
 }
 
@@ -214,7 +276,16 @@ export async function processMessagesValue(value: WebhookValue): Promise<void> {
   }
 
   for (const msg of value.messages ?? []) {
-    if (!SUPPORTED_TYPES.has(msg.type)) continue; // reacciones, etc.: ignorar
+    if (!SUPPORTED_TYPES.has(msg.type) && !BUTTON_REPLY_TYPES.has(msg.type)) {
+      continue; // reacciones, etc.: ignorar
+    }
+    const contenido = contenidoEntrante(msg);
+    if (!contenido) {
+      console.warn(
+        `[webhook] respuesta de botón ${msg.id} (${msg.type}) sin rótulo ni identificador: descartada`
+      );
+      continue;
+    }
     const resolved = resolveIdentity(msg, value.contacts);
     if (!resolved) {
       // Mensaje sin NINGUNA identidad utilizable (ni teléfono ni BSUID):
@@ -228,10 +299,13 @@ export async function processMessagesValue(value: WebhookValue): Promise<void> {
       organizationId,
       identity: resolved,
       waMessageId: msg.id,
-      type: msg.type,
-      text: msg.text?.body ?? null,
+      type: contenido.type,
+      text: contenido.text,
       timestamp: msg.timestamp,
       media: mediaInputFrom(msg),
+      // 018: normalizado aquí, en el adaptador del canal; la ingesta no sabe
+      // de qué forma lo mandó Meta.
+      anuncio: anuncioDeWhatsapp(msg.referral),
     });
   }
 }
@@ -363,6 +437,10 @@ export async function ingestInboundMessage(input: {
   text: string | null;
   timestamp: string;
   media?: MediaInput | null;
+  /** 014: hilo en la plataforma de origen (Zernio); null en WhatsApp. */
+  threadRef?: string | null;
+  /** 016/018: el anuncio que abrió la conversación, ya normalizado por el canal. */
+  anuncio?: AnuncioDeOrigen | null;
 }): Promise<void> {
   const db = getDb();
   const { organizationId } = input;
@@ -373,8 +451,33 @@ export async function ingestInboundMessage(input: {
   );
   const conversation = await getOrCreateConversation(
     organizationId,
-    contact.id
+    contact.id,
+    { channel: contact.channel, threadRef: input.threadRef ?? null }
   );
+
+  // 016/018 — Si el mensaje viene de un anuncio, capturar su origen ANTES del
+  // dedup de mensaje: es idempotente por sí mismo (el primer anuncio gana) y
+  // así un reintento de Meta que llegue con el referral no lo pierde por
+  // haberse cortado antes en el dedup. Siempre, desde 018: la bandeja dice de
+  // qué anuncio llegó cada quien; sin la bandera ATRIBUCION se guarda sin el
+  // identificador de clic (lo decide `registrarAnuncioDeOrigen`). Si falla,
+  // el mensaje del cliente entra igual: el anuncio es contexto, el mensaje es
+  // lo que importa.
+  if (input.anuncio) {
+    try {
+      await registrarAnuncioDeOrigen({
+        organizationId,
+        contactId: contact.id,
+        conversationId: conversation.id,
+        anuncio: input.anuncio,
+      });
+    } catch (err) {
+      console.warn(
+        `[atribucion] no se registró el anuncio de ${conversation.id}:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
 
   const waTimestamp = toDate(input.timestamp);
 
@@ -425,7 +528,7 @@ export async function ingestInboundMessage(input: {
     data: { conversation: { id: conversation.id } },
   });
 
-  await maybeRunAgentTurn(conversation.id);
+  await maybeRunAgentTurn(conversation.id, organizationId, message.id);
 }
 
 function toDate(timestamp: string): Date {

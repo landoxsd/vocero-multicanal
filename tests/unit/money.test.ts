@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  CURRENCIES,
+  CURRENCY_GROUPS,
+  CURRENCY_OPTIONS,
+  DEFAULT_CURRENCY,
   formatMoneyCents,
   isCurrency,
   parseMoneyToCents,
@@ -85,5 +89,29 @@ describe("catálogo de monedas", () => {
     expect(isCurrency("mxn")).toBe(false);
     expect(isCurrency("pesos")).toBe(false);
     expect(isCurrency(null)).toBe(false);
+  });
+
+  it("cubre los países hispanohablantes y ninguna moneda se repite", () => {
+    for (const code of ["MXN", "GTQ", "HNL", "NIO", "CRC", "PAB", "DOP", "COP", "VES", "PEN", "BOB", "CLP", "ARS", "UYU", "PYG", "BRL", "USD", "EUR"]) {
+      expect(isCurrency(code), code).toBe(true);
+    }
+    expect(new Set(CURRENCIES).size).toBe(CURRENCIES.length);
+  });
+
+  it("la predeterminada existe y ningún grupo del selector queda vacío", () => {
+    expect(isCurrency(DEFAULT_CURRENCY)).toBe(true);
+    for (const g of CURRENCY_GROUPS) {
+      expect(CURRENCY_OPTIONS.some((c) => c.group === g.id), g.id).toBe(true);
+    }
+  });
+
+  it("cada moneda tiene grupo y el runtime sabe formatearla", () => {
+    const groups = new Set<string>(CURRENCY_GROUPS.map((g) => g.id));
+    for (const c of CURRENCY_OPTIONS) {
+      expect(groups.has(c.group), c.code).toBe(true);
+      // Sin símbolo significaría que Intl no conoce el código: caería al
+      // «1500.00 XXX» de emergencia.
+      expect(formatMoneyCents(150_000, c.code), c.code).not.toMatch(new RegExp(`\\d ${c.code}$`));
+    }
   });
 });

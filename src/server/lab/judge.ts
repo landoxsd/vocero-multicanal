@@ -28,6 +28,8 @@ export type JudgeOutcome =
  * visible en el reporte y excluido del score. La corrida continúa.
  */
 export async function judgeCase(input: {
+  /** De quién es la configuración de IA con la que juzga. */
+  organizationId: string;
   personaKey: string;
   transcript: { role: "cliente" | "agente"; text: string }[];
   kbText: string;
@@ -45,7 +47,7 @@ export async function judgeCase(input: {
       { role: "system", content: system },
       { role: "user", content: user },
     ],
-    { judge: true }
+    { judge: true, organizationId: input.organizationId }
   );
   if (!result.ok) {
     // Diagnóstico operativo: el caso queda visible como judge_failed y aquí

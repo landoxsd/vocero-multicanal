@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
@@ -8,6 +8,7 @@ import {
   getCredentialsByOrg,
   type Credentials,
 } from "@/server/whatsapp/credentials";
+import { isForbiddenUploadMime } from "@/server/whatsapp/media-headers";
 
 /**
  * 008 — Única frontera de media con la Graph API (constitución II: todo el
@@ -70,11 +71,19 @@ export class MediaValidationError extends Error {
 /**
  * Valida MIME y tamaño para envío; devuelve el kind resuelto. Los formatos
  * que WhatsApp no acepta como su tipo nativo (p. ej. image/bmp) van como
- * documento — igual que hace la app de WhatsApp.
+ * documento — igual que hace la app de WhatsApp. HTML y SVG no van ni como
+ * documento (#78): el navegador de quien los abra los trataría como una
+ * página, y se servirían desde el origen del CRM.
  */
 export function validateOutgoing(mime: string, sizeBytes: number) {
   if (!/^[\w.-]+\/[\w.+-]+$/.test(mime)) {
     throw new MediaValidationError("unsupported_type", "Tipo de archivo no reconocido");
+  }
+  if (isForbiddenUploadMime(mime)) {
+    throw new MediaValidationError(
+      "unsupported_type",
+      "Los archivos HTML y SVG no se pueden enviar como adjunto: un navegador los abriría como página. Conviértelo a PDF o a imagen"
+    );
   }
   const kind = kindFromMime(mime);
   const limit = MEDIA_LIMITS[kind];
@@ -116,6 +125,18 @@ export async function readMediaFile(
   assetId: string
 ): Promise<Buffer> {
   return readFile(mediaFilePath(organizationId, assetId));
+}
+
+/**
+ * 018 — Borra el archivo de un asset. Sin error si ya no estaba: quien lo
+ * llama está deshaciendo una copia que sobró, y un archivo que no existe es
+ * justo el estado al que quiere llegar.
+ */
+export async function deleteMediaFile(
+  organizationId: string,
+  assetId: string
+): Promise<void> {
+  await rm(mediaFilePath(organizationId, assetId), { force: true });
 }
 
 /* ---------- Descarga desde Graph (entrantes y echoes) ---------- */
