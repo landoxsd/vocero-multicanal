@@ -1,0 +1,57 @@
+# Reglas para Cursor y Asistentes de IA — Vocero CRM
+
+Vocero CRM es un CRM de atención unificada omnicanal (WhatsApp Cloud API, WhatsApp Web por QR, Instagram, Messenger, TikTok, MercadoLibre) con agente de IA integrado (OpenRouter, OpenAI-compatible o Gemini nativo) y Laboratorio de evaluación.
+
+## Principios Inviolables
+
+1. **Idioma**: Todo en **español** (UI, comentarios de código, commits y documentación).
+2. **Multi-Tenancy y Aislamiento**:
+   - Toda tabla de dominio lleva `organization_id NOT NULL`.
+   - Toda consulta a la base de datos debe pasar obligatoriamente por `scoped(organizationId)` de `@/lib/db/tenant`.
+3. **Secretos Cifrados en Reposo**:
+   - Todo token o secreto (WhatsApp, IA, Zernio, etc.) se cifra con AES-256-GCM usando `@/lib/crypto`.
+   - Jamás exponer secretos en el cliente, respuestas API o logs. El token solo enseña sus últimos 4 caracteres.
+4. **Validación Estricta**:
+   - Validación obligatoria con **Zod** en todo input externo (body, query, headers, webhooks).
+   - Manejo tolerante de errores y tipado en respuestas de LLMs.
+5. **Canales y Ventanas de Servicio**:
+   - **WhatsApp Cloud API**: Respeta la ventana oficial de 24h de Meta y requiere plantillas cuando la ventana está cerrada.
+   - **WhatsApp Web (QR)**: Corre a través del microservicio `services/whatsapp-web-manager/`. La ventana de 24h de Meta **no aplica** para envío de texto libre.
+   - **Instagram y Messenger**: Ventana de 24h para IA y ventana humana (`HUMAN_AGENT`) de hasta 7 días.
+   - **TikTok**: Ventana de 48h con tope de 10 mensajes sin respuesta del cliente.
+6. **Manejo de IA**:
+   - Todo acceso a modelos LLM pasa exclusivamente por `@/lib/ai` (`chatJson<T>`).
+   - Soporta credenciales en base de datos (Ajustes → IA) y variables de entorno como respaldo (`OPENROUTER_API_TOKEN`, `GEMINI_API_KEY`, etc.).
+7. **Sandbox del Laboratorio**:
+   - Conversaciones con `is_test = true` jamás tocan APIs reales de mensajería (el sender lanza excepción por diseño; no desactivar este guardarraíl).
+
+## Stack Tecnológico
+
+- **Framework**: Next.js 15 (App Router) + React 19.
+- **Lenguaje**: TypeScript en modo estricto (`strict: true`, `noUncheckedIndexedAccess: true`).
+- **Alias de importación**: `@/` mapeado a `src/`.
+- **BD y ORM**: PostgreSQL + Drizzle ORM.
+  - Tablas definidas en `src/lib/db/schema.ts`.
+  - Migraciones generadas en `drizzle/` mediante `pnpm db:generate`. Nunca editar SQL a mano.
+- **Autenticación**: Better Auth con plugin de organización (`src/lib/auth/`).
+- **Estilos**: Tailwind CSS con tokens definidos en `src/app/globals.css` (tema claro y oscuro). Usar tokens semánticos (`bg-background`, `text-foreground`, `border-border`, etc.).
+- **Tiempo Real**: Server-Sent Events (SSE) en `/api/events` para el navegador, y WebSocket interno para el sincronizador de WhatsApp Web.
+
+## Estructura del Código
+
+- `src/server/`: Lógica de dominio del servidor (nunca importar en componentes cliente `"use client"`).
+  - `ai/`: Pipeline del agente, prompts, acciones, credenciales y orden de turnos.
+  - `channels/`: Capacidades, adaptadores omnicanal y estados de canales.
+  - `inbox/`: Ingesta idempotente, identidades de contacto, control de ventana y envío de mensajes.
+  - `agenda/`: Motor de citas, disponibilidad y conectores (Zoom, Google, Enlace fijo).
+  - `attribution/`: Rastreo de anuncios Click-to-WhatsApp y reporte a Meta Conversions API (CAPI).
+- `src/lib/`: Utilidades puras, esquemas Drizzle, configuración de entorno y clientes API.
+- `src/components/`: Componentes React (subcarpetas por módulo: `inbox`, `contacts`, `pipeline`, `settings`, `ui`).
+- `src/app/`: Rutas Next.js App Router (`(app)/` autenticadas, `api/` route handlers).
+
+## Comandos Habituales
+
+- `pnpm dev`: Inicia el entorno de desarrollo.
+- `pnpm typecheck` o `npx tsc --noEmit`: Verifica la integridad de tipos en TypeScript.
+- `npx vitest run`: Ejecuta la suite de pruebas unitarias.
+- `pnpm db:generate`: Genera nuevas migraciones SQL a partir de cambios en `schema.ts`.

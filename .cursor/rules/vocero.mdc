@@ -1,0 +1,27 @@
+---
+description: Reglas de arquitectura, diseño e implementación de Vocero CRM
+globs: **/*
+alwaysApply: true
+---
+
+# Vocero CRM — Cursor Rules
+
+Vocero CRM es un CRM omnicanal self-hosted para atención unificada de clientes con agente de IA integrado y motor de citas.
+
+## Directrices Clave para Cursor y Antigravity
+
+1. **Idioma**: Todo código, comentario, mensaje de commit y texto de interfaz debe redactarse en **español**.
+2. **Consultas a BD**: Toda consulta a tablas de dominio debe filtrarse por tenant usando `scoped(orgId)` de `@/lib/db/tenant`. No realizar consultas globales sin aislamiento de organización.
+3. **Validación Zod**: Todo input externo (cuerpos de petición, parámetros query, payloads de webhooks) debe validarse estrictamente con Zod mediante `parseBody` o schemas propios.
+4. **Secretos en Reposo**: Tokens de acceso y credenciales se almacenan siempre cifrados (AES-256-GCM con `@/lib/crypto`). Jamás devolver secretos completos en endpoints de la API ni imprimirlos en logs.
+5. **Canales de Mensajería**:
+   - `whatsapp` (Cloud API): Sujeto a ventana de 24h y uso de plantillas cuando esté cerrada.
+   - `whatsapp_web` (QR Puppeteer): Exento de ventana de 24h para envío de texto libre. Manejado por `services/whatsapp-web-manager/`.
+   - `instagram` y `messenger`: Soportan ventana humana de 7 días con etiqueta `HUMAN_AGENT`.
+   - `tiktok`: Ventana de 48 horas y tope de 10 mensajes sin respuesta del cliente.
+6. **Separación de Capas**:
+   - Nunca importar módulos de `src/server/` dentro de componentes React marcados con `"use client"`.
+   - La persistencia y mutaciones de estado de leads se centralizan en sus respectivas puertas de dominio (ej. `src/server/leads/stage-history.ts`).
+7. **Verificación y Pruebas**:
+   - Ejecutar `npx tsc --noEmit` tras cambios para asegurar 0 errores de tipado.
+   - Ejecutar `npx vitest run` para comprobar la suite de pruebas unitarias.
