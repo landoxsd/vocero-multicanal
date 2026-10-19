@@ -1,0 +1,34 @@
+---
+description: Reglas para la mensajería omnicanal (WhatsApp Cloud API, WhatsApp Web QR, Instagram, Messenger, TikTok, MercadoLibre)
+globs: src/server/channels/**/*,src/server/inbox/**/*,services/whatsapp-web-manager/**/*
+alwaysApply: false
+---
+
+# Reglas de Canales de Mensajería y Ventanas de Atención
+
+1. **WhatsApp Cloud API Oficial**:
+   - Ventana estándar de 24 horas desde el último mensaje entrante del cliente.
+   - Si la ventana está cerrada, el envío de texto libre es rechazado con error tipado (`window_closed`); debe utilizarse una plantilla aprobada por Meta.
+   - Tráfico oficial canalizado exclusivamente a través de `src/lib/meta/client.ts`.
+
+2. **WhatsApp Web (Código QR / Multi-Sesión)**:
+   - Gestionado por el microservicio `services/whatsapp-web-manager/`.
+   - **No sujeto a la restricción de ventana de 24h** para envío de mensajes de texto directo.
+   - Maneja sesiones persistentes con Puppeteer y código QR.
+
+3. **Instagram Direct y Facebook Messenger**:
+   - Ventana regular de 24 horas para respuestas automáticas de la IA.
+   - Soporte para **Ventana Humana de 7 días** (`HUMAN_AGENT` tag): únicamente aplicable a respuestas de asesores humanos (`ai_generated = false`). La IA jamás debe utilizar la etiqueta de agente humano.
+   - Texto plano sin markdown enriquecido en Instagram y Messenger (utilizar `src/lib/social-text.ts`).
+
+4. **TikTok**:
+   - Ventana de 48 horas.
+   - Límite estricto de máximo 10 mensajes sin respuesta del usuario.
+
+5. **MercadoLibre**:
+   - Soporta respuestas a preguntas de publicaciones (`subType: "question"`) y mensajería post-venta de pedidos (`subType: "post_sale"`).
+   - Renovación automática de tokens OAuth2 cada 6 horas.
+
+6. **Identidad del Contacto**:
+   - La clave estable es `contact.wa_identity` (ej. `58412...`, `bsuid:...`, `ig:...`, `fb:...`, `tt:...`).
+   - El campo `phone` es opcional; jamás asumir que un contacto proviene de un número telefónico tradicional.

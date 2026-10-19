@@ -1,0 +1,27 @@
+---
+description: Reglas para componentes React 19, Next.js 15 App Router, Tailwind CSS y diseño visual
+globs: src/app/**/*,src/components/**/*
+alwaysApply: false
+---
+
+# Directrices de Frontend y UI
+
+1. **Next.js 15 App Router y React 19**:
+   - Usar Server Components por defecto en páginas y layouts.
+   - Usar `"use client"` únicamente en componentes que requieran interactividad del navegador (estado local, hooks, eventos SSE).
+   - Mantener las rutas de Next.js (`route.ts`) como adaptadores ligeros que deleguen en controladores o servicios de `src/server/`.
+
+2. **Diseño Visual y Tokens Semánticos de Tailwind**:
+   - Respetar los tokens configurados en `src/app/globals.css` y `tailwind.config.ts`.
+   - **PROHIBIDO** usar colores fijos como `text-white`, `bg-black`, o códigos hexadecimales sueltos para elementos estructurales.
+   - Emplear siempre tokens temáticos:
+     - Fondos: `bg-background`, `bg-card`, `bg-muted`, `bg-accent`.
+     - Textos: `text-foreground`, `text-muted-foreground`, `text-primary`.
+     - Bordes: `border-border`, `border-input`.
+   - La aplicación soporta modo claro y oscuro; todo componente debe contrastar adecuadamente en ambos temas.
+
+3. **White-Label y Marca**:
+   - No quemar el nombre "Vocero" en títulos de la UI o mensajes de cara al usuario; respetar la configuración de marca dinámica de la organización.
+
+4. **Componentes Primitivos**:
+   - Reutilizar componentes base ubicados en `src/components/ui/` (botones, diálogos, estados vacíos, tooltips).

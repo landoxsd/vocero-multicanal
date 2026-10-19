@@ -1,0 +1,27 @@
+---
+description: Principios de arquitectura, aislamiento multi-tenant, seguridad y convenciones
+globs: **/*
+alwaysApply: true
+---
+
+# Vocero CRM — Principios de Arquitectura y Reglas Globales
+
+Vocero es un CRM omnicanal self-hosted para atención unificada de clientes con agente de IA integrado, soporte multi-asesor, pipeline kanban y motor de citas.
+
+## Invariantes Inviolables
+
+1. **Idioma Español**: Todo código, comentarios, mensajes de commit, documentación y textos de la interfaz deben estar escritos en **español**.
+2. **Multi-Tenancy y Aislamiento**:
+   - Toda tabla de dominio debe incluir `organization_id NOT NULL`.
+   - Toda consulta a la base de datos debe pasar obligatoriamente por `scoped(organizationId)` de `@/lib/db/tenant`. Jamás realizar consultas directas sin filtrar por organización.
+3. **Secretos Cifrados en Reposo**:
+   - Todo token, credencial o secreto (WhatsApp, IA, Zernio, etc.) se cifra con AES-256-GCM usando `@/lib/crypto`.
+   - Jamás exponer secretos en respuestas al cliente, logs o telemetría. Las credenciales en la UI solo enseñan sus últimos 4 caracteres.
+4. **Validación Zod Obligatoria**:
+   - Todo input externo (bodies de POST/PUT, parámetros query, headers, webhooks entrantes) debe validarse estrictamente con esquemas Zod (utilizando `parseBody` de `@/lib/api`).
+5. **Separación de Capas**:
+   - La lógica de negocio y dominio reside exclusivamente en `src/server/`.
+   - **NUNCA** importar módulos de `src/server/` dentro de componentes React marcados con `"use client"`.
+6. **Manejo de Errores y Tipado**:
+   - TypeScript estricto (`strict: true`, `noUncheckedIndexedAccess: true`).
+   - Evitar el uso de `any`; utilizar tipos tipados o `unknown` con guardas de tipo.

@@ -1,0 +1,31 @@
+---
+description: Reglas y convenciones para Drizzle ORM, migraciones y consultas a PostgreSQL
+globs: src/lib/db/**/*,src/server/**/*,drizzle/**/*
+alwaysApply: false
+---
+
+# Directrices de Base de Datos y ORM
+
+1. **Definición de Esquemas**:
+   - Todo esquema de tabla reside en `src/lib/db/schema.ts`.
+   - Utilizar prefijos en IDs (`newId("org_")`, `newId("ct_")`, `newId("cv_")`, etc.) definidos en `src/lib/db/ids.ts`.
+   - Las claves foráneas deben definir adecuadamente su comportamiento en cascada (`onDelete: "cascade"` o `"restrict"`).
+
+2. **Migraciones Aditivas**:
+   - Generar siempre las migraciones mediante `pnpm db:generate`.
+   - **NUNCA** editar a mano los archivos SQL generados en `drizzle/` ni modificar `_journal.json`.
+   - Las migraciones deben ser aditivas y retrocompatibles con instalaciones previas.
+
+3. **Consultas con Aislamiento (Scoped)**:
+   - Para toda consulta a tablas con `organizationId`, invocar `scoped(organizationId)`:
+     ```ts
+     import { getDb, schema } from "@/lib/db";
+     import { scoped } from "@/lib/db/tenant";
+
+     const db = getDb();
+     const results = await db.select().from(schema.conversation).where(scoped(orgId));
+     ```
+   - No ejecutar updates o deletes que no incluyan explícitamente el filtro de `organization_id`.
+
+4. **Transacciones y Concurrencia**:
+   - Utilizar transacciones `db.transaction(async (tx) => { ... })` cuando una operación implique mutaciones consistentes (ej. mover etapa y registrar bitácora).

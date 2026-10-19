@@ -1,0 +1,26 @@
+# Dependencias y builds
+node_modules/
+.next/
+dist/
+build/
+coverage/
+.turbo/
+
+# Archivos de sesión y temporales
+sessions/
+.wwebjs_auth/
+.wwebjs_cache/
+*.log
+*.tmp
+
+# Archivos multimedia del CRM
+data/media/
+public/uploads/
+
+# Drizzle snapshots internos
+drizzle/meta/
+
+# Git y entornos
+.git/
+.env*
+!*.example
