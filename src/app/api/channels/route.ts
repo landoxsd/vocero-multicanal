@@ -117,7 +117,7 @@ export const POST = withAuth(async (session, req: Request) => {
   let credentialsIv: string | null = null;
   let credentialsTag: string | null = null;
   let accountIdentifier = identifier;
-  let errorMessage: string | null = null;
+  const errorMessage: string | null = null;
 
   if (body.data.provider === "whatsapp_web") {
     const waAdapter = new WhatsAppWebAdapter();
