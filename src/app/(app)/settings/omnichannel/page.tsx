@@ -514,7 +514,7 @@ export default function OmnichannelSettingsPage() {
 
       {activeModal === "mercadolibre" && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="w-full max-w-md rounded-xl border bg-card p-6 shadow-xl relative">
+          <div className="w-full max-w-md rounded-xl border bg-card p-6 shadow-xl relative max-h-[90vh] overflow-y-auto">
             <button onClick={() => setActiveModal(null)} className="absolute right-4 top-4 text-muted-foreground hover:text-foreground">
               <X size={18} />
             </button>
@@ -523,7 +523,9 @@ export default function OmnichannelSettingsPage() {
               <h4>Vincular Cuenta de MercadoLibre</h4>
             </div>
             <p className="text-xs text-muted-foreground leading-relaxed mb-4">
-              Puedes vincular **múltiples cuentas de MercadoLibre** (Tienda 1, Tienda 2, etc.) para centralizar preguntas pre-venta y mensajes post-venta en el CRM.
+              Vincula con OAuth (App ID, Client Secret y Refresh Token). El CRM
+              renueva el access token automáticamente (~6 h) y cifra las
+              credenciales en reposo. Sirve para preguntas pre-venta y mensajes post-venta.
             </p>
 
             <form
@@ -532,7 +534,11 @@ export default function OmnichannelSettingsPage() {
                 const form = e.currentTarget;
                 const name = (form.elements.namedItem("meliName") as HTMLInputElement).value;
                 const sellerId = (form.elements.namedItem("meliSellerId") as HTMLInputElement).value;
-                const token = (form.elements.namedItem("meliToken") as HTMLInputElement).value;
+                const appId = (form.elements.namedItem("meliAppId") as HTMLInputElement).value;
+                const clientSecret = (form.elements.namedItem("meliSecret") as HTMLInputElement).value;
+                const refreshToken = (form.elements.namedItem("meliRefresh") as HTMLInputElement).value;
+                const errEl = form.querySelector("[data-meli-error]") as HTMLElement | null;
+                if (errEl) errEl.textContent = "";
 
                 try {
                   const res = await fetch("/api/channels", {
@@ -541,65 +547,104 @@ export default function OmnichannelSettingsPage() {
                     body: JSON.stringify({
                       provider: "mercadolibre",
                       name: name.trim(),
-                      accountIdentifier: sellerId.trim(),
-                      metadata: {
-                        sellerId: sellerId.trim(),
-                        accessToken: token.trim(),
-                      },
+                      accountIdentifier: sellerId.trim() || undefined,
+                      appId: appId.trim(),
+                      clientSecret: clientSecret.trim(),
+                      refreshToken: refreshToken.trim(),
                     }),
                   });
-                  if (res.ok) {
-                    const data = await res.json();
+                  const data = await res.json().catch(() => ({}));
+                  if (res.ok && data.channel) {
                     setChannels((prev) => [...prev, data.channel]);
                     setActiveModal(null);
+                  } else if (errEl) {
+                    errEl.textContent =
+                      data.error?.message ||
+                      data.message ||
+                      "No se pudo vincular la cuenta. Revisa las credenciales OAuth.";
                   }
                 } catch (err) {
                   console.error("Error guardando cuenta MercadoLibre:", err);
+                  if (errEl) {
+                    errEl.textContent = "Sin conexión con el servidor.";
+                  }
                 }
               }}
               className="space-y-3"
             >
               <div>
-                <label className="block text-xs font-medium mb-1">Nombre de la Cuenta / Tienda</label>
+                <label className="block text-xs font-medium mb-1">Nombre de la cuenta / tienda</label>
                 <input
                   name="meliName"
                   required
                   placeholder="Ej. MercadoLibre Tienda Principal"
-                  className="w-full rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium mb-1">User ID / Seller ID (ID de Vendedor MeLi)</label>
+                <label className="block text-xs font-medium mb-1">
+                  Seller ID (opcional si el token lo trae)
+                </label>
                 <input
                   name="meliSellerId"
-                  required
                   placeholder="Ej. 123456789"
-                  className="w-full rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono"
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium mb-1">Access Token de MercadoLibre</label>
+                <label className="block text-xs font-medium mb-1">App ID (Client ID)</label>
                 <input
-                  name="meliToken"
+                  name="meliAppId"
+                  required
+                  placeholder="Tu aplicación en developers.mercadolibre.com"
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Client Secret</label>
+                <input
+                  name="meliSecret"
                   required
                   type="password"
-                  placeholder="APP_USR-..."
-                  className="w-full rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono"
+                  placeholder="Secreto de la aplicación"
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Refresh Token</label>
+                <input
+                  name="meliRefresh"
+                  required
+                  type="password"
+                  placeholder="TG-..."
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary"
                 />
               </div>
 
+              <p
+                data-meli-error
+                className="text-xs text-destructive min-h-[1rem]"
+                role="alert"
+              />
+
               <div className="rounded-lg bg-muted/50 p-3 text-xs space-y-1 mt-2">
-                <div className="font-medium text-foreground">Webhook de Notificaciones para MeLi Devs:</div>
-                <code className="block font-mono text-[10px] bg-background p-2 rounded border break-all select-all">
-                  {typeof window !== "undefined" ? `${window.location.origin}/api/webhooks/mercadolibre` : "/api/webhooks/mercadolibre"}
+                <div className="font-medium text-foreground">Webhook en MeLi Developers:</div>
+                <code className="block font-mono text-[10px] bg-background p-2 rounded border border-border break-all select-all">
+                  {typeof window !== "undefined"
+                    ? `${window.location.origin}/api/webhooks/mercadolibre?secret=TU_MELI_WEBHOOK_SECRET`
+                    : "/api/webhooks/mercadolibre?secret=TU_MELI_WEBHOOK_SECRET"}
                 </code>
+                <p className="text-muted-foreground pt-1">
+                  Define <code className="font-mono">MELI_WEBHOOK_SECRET</code> en el entorno y
+                  pégalo en la query (MeLi no admite headers custom).
+                </p>
               </div>
 
               <div className="flex justify-end gap-2 pt-3">
                 <button
                   type="button"
                   onClick={() => setActiveModal(null)}
-                  className="rounded-lg border px-4 py-2 text-xs font-medium hover:bg-muted"
+                  className="rounded-lg border border-border px-4 py-2 text-xs font-medium hover:bg-muted"
                 >
                   Cancelar
                 </button>
@@ -607,7 +652,7 @@ export default function OmnichannelSettingsPage() {
                   type="submit"
                   className="rounded-lg bg-amber-500 px-4 py-2 text-xs font-medium text-white hover:bg-amber-600"
                 >
-                  Guardar Cuenta MeLi
+                  Vincular y probar OAuth
                 </button>
               </div>
             </form>

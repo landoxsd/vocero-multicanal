@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { apiError, withAuth } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
+import { publicChannelAccount } from "@/server/channels/mercadolibre/credentials";
 import { WhatsAppWebAdapter } from "@/server/channels/whatsapp-web/provider";
 
 export const dynamic = "force-dynamic";
@@ -58,7 +59,7 @@ export const GET = withAuth(async (session, _req: Request, ctx: Params) => {
     }
   }
 
-  return Response.json({ channel });
+  return Response.json({ channel: publicChannelAccount(channel) });
 });
 
 /**

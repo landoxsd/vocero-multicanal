@@ -1,6 +1,7 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
+import { scoped } from "@/lib/db/tenant";
 import { graphRequest, MetaApiError, normalizeRecipient } from "@/lib/meta/client";
 import { destinatarioMeta, type Destinatario } from "@/lib/meta/destinatario";
 import { publish } from "@/server/events/bus";
@@ -46,6 +47,10 @@ import {
   aiWindowClosedMessage,
 } from "@/server/channels/capabilities";
 import { isChannelEnabled } from "@/server/channels/enabled";
+import {
+  outboundMetaFromInbound,
+  type MeliOutboundMeta,
+} from "@/server/channels/mercadolibre/outbound-meta";
 import { serializeMessage } from "@/server/inbox/ingest";
 import {
   saveMediaFile,
@@ -54,6 +59,33 @@ import {
 } from "@/server/whatsapp/media";
 import { omniChannelManager } from "@/server/channels/omnichannel-manager";
 import type { ChannelAccountRecord } from "@/server/channels/types";
+
+/** Último entrante del hilo → metadatos MeLi (questionId / packId / …). */
+async function loadMeliOutboundMetadata(
+  organizationId: string,
+  conversationId: string
+): Promise<MeliOutboundMeta> {
+  const db = getDb();
+  const [lastIn] = await db
+    .select({ metadata: schema.message.metadata })
+    .from(schema.message)
+    .where(
+      scoped(
+        schema.message.organizationId,
+        organizationId,
+        and(
+          eq(schema.message.conversationId, conversationId),
+          eq(schema.message.direction, "in")
+        )
+      )
+    )
+    .orderBy(desc(schema.message.createdAt))
+    .limit(1);
+
+  return outboundMetaFromInbound(
+    (lastIn?.metadata as Record<string, unknown> | null) ?? null
+  );
+}
 
 /** Error tipado del envío; `code` mapea a HTTP en la capa de API. */
 export class SendError extends Error {
@@ -467,10 +499,18 @@ export async function sendText(input: {
 
   let waMessageId: string | null = null;
   if (channelAccount) {
+    const outboundMeta =
+      channelAccount.provider === "mercadolibre"
+        ? await loadMeliOutboundMetadata(
+            input.organizationId,
+            input.conversationId
+          )
+        : undefined;
     const res = await omniChannelManager.sendOutboundMessage(channelAccount, {
       channelAccountId: channelAccount.id,
       recipientId: recipient,
       text,
+      metadata: outboundMeta,
     });
     if (!res.success) {
       throw new SendError("meta_error", res.error || "Fallo enviando mensaje por canal omnicanal");
@@ -690,10 +730,18 @@ export async function sendStructured(
       input.kind === "location"
         ? `📍 Ubicación: ${input.location.name || ""} https://maps.google.com/?q=${input.location.latitude},${input.location.longitude}`
         : `👤 Contacto: ${input.contacts.map((c) => `${c.name} (${c.phone})`).join(", ")}`;
+    const outboundMeta =
+      channelAccount.provider === "mercadolibre"
+        ? await loadMeliOutboundMetadata(
+            input.organizationId,
+            input.conversationId
+          )
+        : undefined;
     const res = await omniChannelManager.sendOutboundMessage(channelAccount, {
       channelAccountId: channelAccount.id,
       recipientId: recipient,
       text: textDesc,
+      metadata: outboundMeta,
     });
     waMessageId = res.externalMessageId || `chn_${Date.now()}`;
   } else if (credentials) {

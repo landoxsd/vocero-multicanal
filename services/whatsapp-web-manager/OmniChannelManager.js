@@ -29,9 +29,24 @@ class OmniChannelManager {
             webhookUrl: this.webhookUrl
         });
 
+        // MeLi va a /api/webhooks/mercadolibre, no al de WhatsApp Web.
+        const meliWebhookUrl =
+            config.meliWebhookUrl ||
+            process.env.MELI_WEBHOOK_URL ||
+            (this.webhookUrl
+                ? String(this.webhookUrl).replace(
+                      /\/api\/webhooks\/whatsapp-web\/?$/,
+                      "/api/webhooks/mercadolibre"
+                  )
+                : null);
+
         this.mercadolibre = new MercadoLibreManager({
             dataPath: `${this.sessionsDir}/mercadolibre`,
-            webhookUrl: this.webhookUrl
+            webhookUrl: meliWebhookUrl,
+            webhookSecret:
+                config.meliWebhookSecret ||
+                process.env.MELI_WEBHOOK_SECRET ||
+                this.webhookSecret,
         });
     }
 

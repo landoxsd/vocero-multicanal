@@ -1,68 +1,26 @@
 import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
-import { getDb, schema } from "@/lib/db";
-import { omniChannelManager } from "@/server/channels/omnichannel-manager";
+import { requireMeliWebhookSecret } from "@/server/channels/mercadolibre/webhook-auth";
+import { processMeliNotification } from "@/server/channels/mercadolibre/webhook";
 
+export const dynamic = "force-dynamic";
+
+/**
+ * Webhook de notificaciones de MercadoLibre (preguntas y mensajes).
+ * También acepta el envoltorio que reenvía `whatsapp-web-manager`.
+ * MeLi espera 200 rápido; el procesamiento es síncrono pero acotado.
+ */
 export async function POST(req: Request) {
+  const denied = requireMeliWebhookSecret(req);
+  if (denied) return denied;
+
   try {
-    const body = await req.json();
-    const { resource, user_id, topic } = body;
-
-    if (!user_id || !resource) {
-      return NextResponse.json({ status: "ignored" });
-    }
-
-    const db = getDb();
-    const [channel] = await db
-      .select()
-      .from(schema.channelAccount)
-      .where(
-        and(
-          eq(schema.channelAccount.provider, "mercadolibre"),
-          eq(schema.channelAccount.accountIdentifier, String(user_id))
-        )
-      )
-      .limit(1);
-
-    if (!channel) {
-      return NextResponse.json({ status: "channel_not_found" });
-    }
-
-    const meta = (channel.metadata || {}) as { accessToken?: string };
-    const accessToken = meta.accessToken;
-
-    if (topic === "questions" && accessToken) {
-      // Consultar detalle de la pregunta a la API de MercadoLibre
-      const questionRes = await fetch(`https://api.mercadolibre.com${resource}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-
-      if (questionRes.ok) {
-        const qData = await questionRes.json();
-        if (qData.status === "UNANSWERED") {
-          await omniChannelManager.processInboundMessage({
-            channelAccountId: channel.id,
-            provider: "mercadolibre",
-            platform: "mercadolibre",
-            senderId: String(qData.from?.id || qData.id),
-            senderName: `Comprador MeLi #${qData.from?.id || qData.id}`,
-            text: qData.text,
-            externalMessageId: String(qData.id),
-            metadata: {
-              subType: "question",
-              questionId: qData.id,
-              itemId: qData.item_id,
-              raw: qData,
-            },
-          });
-        }
-      }
-    }
-
-    return NextResponse.json({ status: "ok" });
+    const body: unknown = await req.json();
+    const result = await processMeliNotification(body);
+    // MeLi reintenta ante 5xx; channel_not_found / ignored → 200.
+    return NextResponse.json(result);
   } catch (error: unknown) {
     const err = error instanceof Error ? error.message : String(error);
     console.error("[Webhook MercadoLibre] Error procesando evento:", err);
-    return NextResponse.json({ error: err }, { status: 500 });
+    return NextResponse.json({ error: "processing_error" }, { status: 500 });
   }
 }

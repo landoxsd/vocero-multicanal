@@ -1,8 +1,13 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withAuth } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
+import {
+  encryptMeliSecrets,
+  provisionMeliCredentials,
+  publicChannelAccount,
+} from "@/server/channels/mercadolibre/credentials";
 import { WhatsAppWebAdapter } from "@/server/channels/whatsapp-web/provider";
 import { waWebCrmWebhookUrl } from "@/server/channels/whatsapp-web/webhook-url";
 
@@ -20,6 +25,10 @@ const createChannelSchema = z.object({
   phoneNumber: z.string().optional(),
   accountIdentifier: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),
+  /** OAuth MercadoLibre (también se aceptan dentro de metadata). */
+  appId: z.string().min(1).optional(),
+  clientSecret: z.string().min(1).optional(),
+  refreshToken: z.string().min(1).optional(),
 });
 
 /**
@@ -74,7 +83,9 @@ export const GET = withAuth(async (session) => {
     if (patch.lastConnectedAt) channel.lastConnectedAt = patch.lastConnectedAt;
   }
 
-  return Response.json({ channels });
+  return Response.json({
+    channels: channels.map((ch) => publicChannelAccount(ch)),
+  });
 });
 
 /**
@@ -92,11 +103,22 @@ export const POST = withAuth(async (session, req: Request) => {
     body.data.phoneNumber ||
     `session_${Date.now()}`;
 
-  let initialStatus: "connected" | "connecting" | "scan_qr" | "disconnected" | "error" =
-    "disconnected";
+  let initialStatus:
+    | "connected"
+    | "connecting"
+    | "scan_qr"
+    | "disconnected"
+    | "error" = "disconnected";
   let qrCode: string | null = null;
+  let metadata: Record<string, unknown> | null = body.data.metadata
+    ? { ...body.data.metadata }
+    : null;
+  let credentialsCipher: string | null = null;
+  let credentialsIv: string | null = null;
+  let credentialsTag: string | null = null;
+  let accountIdentifier = identifier;
+  let errorMessage: string | null = null;
 
-  // Si es WhatsApp Web, inicializar sesión con WhatsAppMultiManager
   if (body.data.provider === "whatsapp_web") {
     const waAdapter = new WhatsAppWebAdapter();
     const webhookUrl = waWebCrmWebhookUrl();
@@ -122,6 +144,68 @@ export const POST = withAuth(async (session, req: Request) => {
     }
   }
 
+  if (body.data.provider === "mercadolibre") {
+    const meta = metadata || {};
+    const appId =
+      body.data.appId ||
+      (typeof meta.appId === "string" ? meta.appId : undefined);
+    const clientSecret =
+      body.data.clientSecret ||
+      (typeof meta.clientSecret === "string"
+        ? meta.clientSecret
+        : typeof meta.secret === "string"
+          ? meta.secret
+          : undefined);
+    const refreshToken =
+      body.data.refreshToken ||
+      (typeof meta.refreshToken === "string" ? meta.refreshToken : undefined);
+
+    if (!appId?.trim() || !clientSecret?.trim() || !refreshToken?.trim()) {
+      return apiError(
+        422,
+        "validation_error",
+        "MercadoLibre requiere App ID, Client Secret y Refresh Token"
+      );
+    }
+
+    try {
+      const { secrets, sellerIdFromToken } = await provisionMeliCredentials({
+        appId,
+        clientSecret,
+        refreshToken,
+      });
+      const enc = encryptMeliSecrets(secrets);
+      credentialsCipher = enc.credentialsCipher;
+      credentialsIv = enc.credentialsIv;
+      credentialsTag = enc.credentialsTag;
+      // El webhook de MeLi llega con user_id = seller del token; esa es la llave.
+      accountIdentifier = (
+        sellerIdFromToken ||
+        body.data.accountIdentifier ||
+        identifier
+      ).trim();
+      metadata = { sellerId: accountIdentifier };
+      initialStatus = "connected";
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : "Error al validar OAuth de MercadoLibre";
+      return apiError(400, "meli_oauth_failed", msg);
+    }
+  }
+
+  // No persistir secretos en metadata (legacy accessToken / refresh / secret).
+  if (metadata) {
+    const {
+      accessToken: _a,
+      refreshToken: _r,
+      secret: _s,
+      clientSecret: _cs,
+      appId: _app,
+      ...safe
+    } = metadata;
+    metadata = Object.keys(safe).length > 0 ? safe : null;
+  }
+
   await db.insert(schema.channelAccount).values({
     id: channelId,
     organizationId: session.organizationId,
@@ -129,9 +213,14 @@ export const POST = withAuth(async (session, req: Request) => {
     name: body.data.name,
     status: initialStatus,
     phoneNumber: body.data.phoneNumber || null,
-    accountIdentifier: identifier,
+    accountIdentifier,
     qrCode,
-    metadata: body.data.metadata || null,
+    credentialsCipher,
+    credentialsIv,
+    credentialsTag,
+    metadata,
+    errorMessage,
+    lastConnectedAt: initialStatus === "connected" ? new Date() : null,
   });
 
   const [created] = await db
@@ -140,5 +229,8 @@ export const POST = withAuth(async (session, req: Request) => {
     .where(eq(schema.channelAccount.id, channelId))
     .limit(1);
 
-  return Response.json({ channel: created }, { status: 201 });
+  return Response.json(
+    { channel: created ? publicChannelAccount(created) : null },
+    { status: 201 }
+  );
 });

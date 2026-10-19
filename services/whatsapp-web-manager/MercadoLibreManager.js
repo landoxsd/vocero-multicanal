@@ -11,6 +11,7 @@ class MercadoLibreManager {
     constructor(options = {}) {
         this.dataPath = path.resolve(options.dataPath || "./sessions/mercadolibre");
         this.webhookUrl = options.webhookUrl || null;
+        this.webhookSecret = options.webhookSecret || process.env.MELI_WEBHOOK_SECRET || process.env.WA_WEB_WEBHOOK_SECRET || null;
         
         /** @type {Map<string, { accountId: string, appId: string, secret: string, accessToken: string, refreshToken: string, sellerId: string, expiresAt: number }>} */
         this.accounts = new Map();
@@ -135,12 +136,12 @@ class MercadoLibreManager {
         const acc = this.accounts.get(accountId);
         const token = await this._getValidToken(accountId);
 
-        const url = `https://api.mercadolibre.com/messages/packs/${packId}/sellers/${acc.sellerId}?client_id=${acc.appId}`;
+        const url = `https://api.mercadolibre.com/messages/packs/${packId}/sellers/${acc.sellerId}?tag=post_sale`;
         const res = await axios.post(
             url,
             {
-                from: { user_id: parseInt(acc.sellerId) },
-                to: { user_id: parseInt(buyerUserId) },
+                from: { user_id: parseInt(acc.sellerId, 10) },
+                to: { user_id: parseInt(buyerUserId, 10) },
                 text: { plain: text }
             },
             {
@@ -184,12 +185,35 @@ class MercadoLibreManager {
                 accountId: matchedAccount.accountId,
                 topic,
                 resource,
+                sellerId: matchedAccount.sellerId,
                 data: res.data
             };
 
-            // Notificar vía webhook global
+            // Reenviar al CRM (formato que entiende /api/webhooks/mercadolibre)
             if (this.webhookUrl) {
-                await axios.post(this.webhookUrl, { event: "mercadolibre.notification", payload: eventData }).catch(() => {});
+                const headers = { "Content-Type": "application/json" };
+                if (this.webhookSecret) {
+                    headers["X-Webhook-Secret"] = this.webhookSecret;
+                }
+                await axios
+                    .post(
+                        this.webhookUrl,
+                        {
+                            event: "mercadolibre.notification",
+                            // Cuerpo nativo MeLi + envoltorio: el CRM acepta ambos.
+                            topic,
+                            resource,
+                            user_id: matchedAccount.sellerId,
+                            payload: eventData,
+                        },
+                        { headers }
+                    )
+                    .catch((err) => {
+                        console.error(
+                            "❌ Error reenviando webhook MeLi al CRM:",
+                            err.response ? err.response.status : err.message
+                        );
+                    });
             }
 
             return eventData;
