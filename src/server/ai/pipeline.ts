@@ -214,6 +214,22 @@ export async function runAgentTurn(
     return leido;
   }
 
+  // Guardarrail contra respuestas a destiempo a mensajes antiguos:
+  // Si el ultimo mensaje entrante tiene mas de 2 horas de antiguedad (por ejemplo,
+  // tras encender el agente o reconectar/sincronizar WhatsApp Web), el agente NO
+  // debe disparar una respuesta automatica de la nada a una conversacion fria.
+  const MAX_INBOUND_AGE_MS = 2 * 60 * 60 * 1000;
+  if (
+    !conversation.isTest &&
+    lastInbound.createdAt &&
+    Date.now() - new Date(lastInbound.createdAt).getTime() > MAX_INBOUND_AGE_MS
+  ) {
+    console.warn(
+      `[agente] Omitiendo respuesta automatica en ${conversationId}: entrante demasiado antiguo (>2h).`
+    );
+    return leido;
+  }
+
   // En WhatsApp Web (QR) o canales de channel_account no existe restricción de 24h de Cloud API.
   let isUnrestricted = Boolean(conversation.channelAccountId);
   if (!isUnrestricted && conversation.channel === "whatsapp") {
